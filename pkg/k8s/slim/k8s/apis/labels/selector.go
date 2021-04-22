@@ -877,6 +877,10 @@ func parse(selector string) (internalSelector, error) {
 }
 
 func validateLabelKey(k string, path *field.Path) *field.Error {
+	// TODO(Mauricio): Add proper spiffe validation here
+	if strings.HasPrefix(k, "spiffe.//") {
+		return nil
+	}
 	if errs := validation.IsQualifiedName(k); len(errs) != 0 {
 		return field.Invalid(path, k, strings.Join(errs, "; "))
 	}
