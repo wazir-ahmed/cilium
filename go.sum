@@ -182,8 +182,6 @@ github.com/cilium/kafka v0.0.0-20180809090225-01ce283b732b h1:+bsFX/WOMIoaayXVyR
 github.com/cilium/kafka v0.0.0-20180809090225-01ce283b732b/go.mod h1:ktgizta3CPZBKz5uW272SJyjiro0vn4nOVP7Pk4RopA=
 github.com/cilium/metallb v0.1.1-0.20210607221240-b4c60b959dd7 h1:HcvwigeOAXg+GJDAA7gKgpo8m0X+p/WL7wYdGIYIPuQ=
 github.com/cilium/metallb v0.1.1-0.20210607221240-b4c60b959dd7/go.mod h1:HTQ4n8ZdoOg8+j+txkXsFVKmHHc2PaXirzW5d4Sw7Qw=
-github.com/cilium/proxy v0.0.0-20210511221533-82a70d56bf32 h1:8imv/jHGU2g796+N6VEwSZcU8H6MQ0z33VTNeFeKMpQ=
-github.com/cilium/proxy v0.0.0-20210511221533-82a70d56bf32/go.mod h1:mvauc94lqkyJunRsU9Ef5FIsixi8vBeDoxuMYoGBemk=
 github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=
 github.com/cncf/udpa/go v0.0.0-20191209042840-269d4d468f6f/go.mod h1:M8M6+tZqaGXZJjfX53e64911xZQV5JYwmTeXPW+k8Sc=
 github.com/cncf/udpa/go v0.0.0-20200629203442-efcf912fb354/go.mod h1:WmhPx2Nbnhtbo57+VJT5O0JRkEi1Wbu0z5j0R8u5Hbk=
@@ -626,10 +624,8 @@ github.com/karrick/godirwalk v1.10.3/go.mod h1:RoGL9dQei4vP9ilrpETWE8CLOZ1kiN0Lh
 github.com/kevinburke/ssh_config v0.0.0-20201106050909-4977a11b4351 h1:DowS9hvgyYSX4TO5NpyC606/Z4SxnNYbT+WX27or6Ck=
 github.com/kevinburke/ssh_config v0.0.0-20201106050909-4977a11b4351/go.mod h1:CT57kijsi8u/K/BOFA39wgDQJ9CxiF4nAY/ojJ6r6mM=
 github.com/keybase/go-ps v0.0.0-20190827175125-91aafc93ba19/go.mod h1:hY+WOq6m2FpbvyrI93sMaypsttvaIL5nhVR92dTMUcQ=
-github.com/kinvolk/spire-api-sdk v1.0.0-pre.0.20210531191218-f6af4bcf4c8e h1:TxTUdiVF31jdA2SrUdJOlH3lyIrWcaY1DlAjr6ui7BE=
-github.com/kinvolk/spire-api-sdk v1.0.0-pre.0.20210531191218-f6af4bcf4c8e/go.mod h1:2wSTZ6oEnKqI3uBST05Mmm751+yoHEvgxomYKYOQ6Ko=
-github.com/kinvolk/spire-api-sdk v1.0.0-pre.0.20210610130402-7108593e3cec h1:hBk3Ug1Vo+IZ0Yjkwtze8eyX0NS9l9SbtA4+Uhf67q4=
-github.com/kinvolk/spire-api-sdk v1.0.0-pre.0.20210610130402-7108593e3cec/go.mod h1:2wSTZ6oEnKqI3uBST05Mmm751+yoHEvgxomYKYOQ6Ko=
+github.com/kinvolk/cilium-proxy v0.0.0-20210708141120-2298198b346b h1:XqB82xmctnU+7+eDws0i23AmbMUDlW1lQe1KO1WvDJY=
+github.com/kinvolk/cilium-proxy v0.0.0-20210708141120-2298198b346b/go.mod h1:mvauc94lqkyJunRsU9Ef5FIsixi8vBeDoxuMYoGBemk=
 github.com/kinvolk/spire-api-sdk v1.0.0-pre.0.20210628133559-6fd689f7c71c h1:eoo+2LiEMqkEsGPywyo1AF1SNwZ8wxwVieDBVuJ7r78=
 github.com/kinvolk/spire-api-sdk v1.0.0-pre.0.20210628133559-6fd689f7c71c/go.mod h1:2wSTZ6oEnKqI3uBST05Mmm751+yoHEvgxomYKYOQ6Ko=
 github.com/kisielk/errcheck v1.1.0/go.mod h1:EZBBE59ingxPouuu3KfxchcWSUPOHkagtvWXihfKN4Q=
