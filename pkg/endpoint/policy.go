@@ -804,6 +804,9 @@ func (e *Endpoint) SetIdentity(identity *identityPkg.Identity, newEndpoint bool)
 	e.runIPIdentitySync(e.IPv4)
 	e.runIPIdentitySync(e.IPv6)
 
+	// TODO(Mauricio): When to call this function?
+	e.sendSVIDs()
+
 	if oldIdentity != identity.StringID() {
 		e.getLogger().WithFields(logrus.Fields{
 			logfields.Identity:       identity.StringID(),

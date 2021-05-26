@@ -359,6 +359,8 @@ type Endpoint struct {
 	spiffeExpiration map[string]int64
 
 	spiffeWatcher *spiffe.Watcher
+
+	svids []*spiffe.SpiffeSVID
 }
 
 func (e *Endpoint) SetSpiffeWatcher(spiffeWatcher *spiffe.Watcher) {
@@ -1248,13 +1250,21 @@ func (e *Endpoint) WatchSpiffeIDs() error {
 			e.spiffeExpiration[spiffeLabel.Key] = svid.ExpiresAt
 		}
 
+		// assign here to be sure they're considered when calling sendSVIDs()
+		e.svids = svids
+
 		if !newSpiffeIds.Equals(e.spiffeIDs) {
 			// Labels changed, calculate new ID
 			if err := e.ModifyIdentityLabels(newSpiffeIds, e.spiffeIDs); err != nil {
 				// TODO(Mauricio): retry, fail?
 				e.LogStatus(Other, Warning, fmt.Sprintf("Failed to update identity labels (1) %s", err.Error()))
 			}
+		} else {
+			// Labels are the same, it's just a cert rotation.
+			e.LogStatusOK(Other, fmt.Sprintf("Handling cert rotation"))
+			e.sendSVIDs()
 		}
+
 		e.spiffeIDs = newSpiffeIds
 	}
 
@@ -1313,6 +1323,13 @@ func (e *Endpoint) WatchSpiffeIDs() error {
 	)
 
 	return nil
+}
+
+// Push current SVIDs to Envoy
+func (e *Endpoint) sendSVIDs() {
+	// TODO: how to lock?
+	// - this is called from SetIdentity that already has a lock...
+	e.proxy.UpdateSVIDs(e.getIdentity(), e.svids)
 }
 
 // SetPod sets the pod related to this endpoint.
