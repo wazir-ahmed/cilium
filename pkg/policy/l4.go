@@ -318,6 +318,26 @@ func (l4 *L4Filter) GetIngress() bool {
 	return l4.Ingress
 }
 
+func (l4 *L4Filter) HasOriginatingTLS() bool {
+	for _, r := range l4.L7RulesPerSelector {
+		if r.OriginatingTLS != nil {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (l4 *L4Filter) HasTerminatingTLS() bool {
+	for _, r := range l4.L7RulesPerSelector {
+		if r.TerminatingTLS != nil {
+			return true
+		}
+	}
+
+	return false
+}
+
 // GetPort returns the port at which the L4Filter applies as a uint16.
 func (l4 *L4Filter) GetPort() uint16 {
 	return uint16(l4.Port)
@@ -1105,4 +1125,7 @@ type ProxyPolicy interface {
 	GetL7Parser() L7ParserType
 	GetIngress() bool
 	GetPort() uint16
+
+	HasOriginatingTLS() bool
+	HasTerminatingTLS() bool
 }

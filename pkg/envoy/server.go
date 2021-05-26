@@ -503,7 +503,7 @@ func (s *XDSServer) addListener(name string, port uint16, listenerConf func() *e
 	s.mutex.Unlock()
 }
 
-func (s *XDSServer) getListenerConf(name string, kind policy.L7ParserType, port uint16, isIngress bool, mayUseOriginalSourceAddr bool) *envoy_config_listener.Listener {
+func (s *XDSServer) getListenerConf(name string, kind policy.L7ParserType, port uint16, isIngress bool, mayUseOriginalSourceAddr bool, hasOriginatingTLS, hasTerminatingTLS bool) *envoy_config_listener.Listener {
 	clusterName := egressClusterName
 	socketMark := int64(0xB00)
 	if isIngress {
@@ -551,14 +551,33 @@ func (s *XDSServer) getListenerConf(name string, kind policy.L7ParserType, port 
 			Name: "envoy.filters.listener.tls_inspector",
 		}}, listenerConf.ListenerFilters...)
 
-		listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(clusterName, false))
-
 		// Add a TLS variant
 		tlsClusterName := egressTLSClusterName
 		if isIngress {
 			tlsClusterName = ingressTLSClusterName
 		}
-		listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(tlsClusterName, true))
+
+		if hasOriginatingTLS == hasTerminatingTLS {
+			// HTTP -> HTTP
+			listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(clusterName, false))
+
+			// HTTPS -> HTTPS
+			listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(tlsClusterName, true))
+		} else {
+			if hasOriginatingTLS {
+				// HTTP -> HTTPS
+				listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(tlsClusterName, false))
+
+				// HTTPS -> HTTPS
+				listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(tlsClusterName, true))
+			} else {
+				// HTTPS -> HTTP
+				listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(clusterName, true))
+
+				// HTTP -> HTTP
+				listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(clusterName, false))
+			}
+		}
 	} else {
 		// Default TCP chain, takes care of all parsers in proxylib
 		listenerConf.FilterChains = append(listenerConf.FilterChains, s.getTcpFilterChainProto(clusterName, "", nil))
@@ -580,11 +599,11 @@ func (s *XDSServer) getListenerConf(name string, kind policy.L7ParserType, port 
 }
 
 // AddListener adds a listener to a running Envoy proxy.
-func (s *XDSServer) AddListener(name string, kind policy.L7ParserType, port uint16, isIngress bool, mayUseOriginalSourceAddr bool, wg *completion.WaitGroup) {
+func (s *XDSServer) AddListener(name string, kind policy.L7ParserType, port uint16, isIngress bool, mayUseOriginalSourceAddr bool, wg *completion.WaitGroup, hasOriginatingTLS, hasTerminatingTLS bool) {
 	log.Debugf("Envoy: %s AddListener %s (mayUseOriginalSourceAddr: %v)", kind, name, mayUseOriginalSourceAddr)
 
 	s.addListener(name, port, func() *envoy_config_listener.Listener {
-		return s.getListenerConf(name, kind, port, isIngress, mayUseOriginalSourceAddr)
+		return s.getListenerConf(name, kind, port, isIngress, mayUseOriginalSourceAddr, hasOriginatingTLS, hasTerminatingTLS)
 	}, wg, nil)
 }
 
