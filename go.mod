@@ -75,6 +75,7 @@ require (
 	github.com/spf13/cobra v1.1.3
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.8.0
+	github.com/spiffe/spire-api-sdk v1.0.0-pre
 	github.com/stretchr/testify v1.7.0
 	github.com/vishvananda/netlink v1.1.1-0.20210510164352-d17758a128bf
 	github.com/vishvananda/netns v0.0.0-20201230012202-c4f3ca719c73
@@ -118,6 +119,8 @@ replace (
 	github.com/optiopay/kafka => github.com/cilium/kafka v0.0.0-20180809090225-01ce283b732b
 
 	go.universe.tf/metallb => github.com/cilium/metallb v0.1.1-0.20210607221240-b4c60b959dd7
+
+	github.com/spiffe/spire-api-sdk => github.com/kinvolk/spire-api-sdk v1.0.0-pre.0.20210628133559-6fd689f7c71c
 
 	// Using private fork of controller-tools. See commit msg for more context
 	// as to why we are using a private fork.
