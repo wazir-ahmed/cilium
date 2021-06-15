@@ -684,16 +684,17 @@ func createL4IngressFilter(policyCtx PolicyContext, fromEndpoints api.EndpointSe
 	}
 	// If the filter would apply L7 rules for the Host, when we should accept everything from host,
 	// then wildcard Host at L7.
-	if !pr.Rules.IsEmpty() && len(hostWildcardL7) > 0 {
-		for cs := range filter.L7RulesPerSelector {
-			if cs.Selects(identity.ReservedIdentityHost) {
-				for _, name := range hostWildcardL7 {
-					selector := api.ReservedEndpointSelectors[name]
-					filter.cacheIdentitySelector(selector, policyCtx.GetSelectorCache(), policyCtx.IsDeny())
-				}
-			}
-		}
-	}
+	// TODO: this breaks ingress traffic from same host
+	//	if !pr.Rules.IsEmpty() && len(hostWildcardL7) > 0 {
+	//		for cs := range filter.L7RulesPerSelector {
+	//			if cs.Selects(identity.ReservedIdentityHost) {
+	//				for _, name := range hostWildcardL7 {
+	//					selector := api.ReservedEndpointSelectors[name]
+	//					filter.cacheIdentitySelector(selector, policyCtx.GetSelectorCache(), policyCtx.IsDeny())
+	//				}
+	//			}
+	//		}
+	//	}
 
 	return filter, nil
 }
