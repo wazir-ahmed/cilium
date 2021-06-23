@@ -19,8 +19,13 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"sync"
+	"time"
 
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
+	"github.com/cilium/cilium/pkg/lock"
+	"github.com/cilium/cilium/pkg/logging"
+	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
 
 	delegationv1 "github.com/spiffe/spire-api-sdk/proto/spire/api/agent/delegation/v1"
@@ -29,158 +34,279 @@ import (
 	"google.golang.org/grpc"
 )
 
-var watcher *spiffeWatcher
+const (
+	spiffeSubsys = "spiffe"
+	timeDelay    = 10 * time.Second
+)
 
-// InitWatcher initializes the spiffe watcher instance.
-// Users can call Watch() and Unwatch() to add/remove endpoints from the watched
-// set.
-func InitWatcher() error {
-	ret, err := newWatcher(option.Config.SpirePrivilegedAPISocketPath)
-	if err != nil {
-		return fmt.Errorf("failed to create spiffe watcher: %w", err)
-	}
-
-	go ret.watchAllSVIDs()
-
-	watcher = ret
-
-	return nil
-}
-
-// Watch adds the pod to the watched list. updateFunc will be called when there
-// is an update for such a pod.
-func Watch(pod *slim_corev1.Pod, updateFunc UpdateFunc) error {
-	if watcher == nil {
-		return fmt.Errorf("spiffe watcher not initialized")
-	}
-	return watcher.watch(pod, updateFunc)
-}
-
-// Unwatch removes a pod from the watched list.
-func Unwatch(pod *slim_corev1.Pod) error {
-	if watcher == nil {
-		return fmt.Errorf("spiffe watcher not initialized")
-	}
-	return watcher.unwatch(pod)
-}
+var (
+	log = logging.DefaultLogger.WithField(logfields.LogSubsys, spiffeSubsys)
+)
 
 type SpiffeSVID struct {
 	SpiffeID  string
 	CertChain []byte
 	Key       []byte
+	ExpiresAt int64
 }
 
 type UpdateFunc func([]*SpiffeSVID)
 
-type spiffeWatcher struct {
-	client delegationv1.DelegationClient
+const (
+	ADD int = 1
+	DEL     = 2
+)
 
+type request struct {
+	typ        int
+	pod        *slim_corev1.Pod
+	updateFunc UpdateFunc
+}
+
+type Watcher struct {
 	stream delegationv1.Delegation_FetchX509SVIDsClient
 
 	updateFuncs map[uint64]UpdateFunc
-	ids         map[*slim_corev1.Pod]uint64
+
+	ids map[*slim_corev1.Pod]uint64
+
+	requests map[*slim_corev1.Pod]request
+
+	mutex *lock.Mutex
+	cv    *sync.Cond
+
+	processRequestsDone bool
 }
 
-func newWatcher(spireSocketPath string) (*spiffeWatcher, error) {
-	client, err := newDelegationClient(spireSocketPath)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx := context.Background()
-
-	stream, err := client.FetchX509SVIDs(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	ret := &spiffeWatcher{
-		client:      client,
-		stream:      stream,
+func NewWatcher() *Watcher {
+	w := &Watcher{
 		updateFuncs: make(map[uint64]UpdateFunc),
 		ids:         make(map[*slim_corev1.Pod]uint64),
+		requests:    make(map[*slim_corev1.Pod]request),
+		mutex:       &lock.Mutex{},
 	}
 
-	return ret, nil
+	w.cv = sync.NewCond(w.mutex)
+	return w
 }
 
-func (s *spiffeWatcher) watch(pod *slim_corev1.Pod, updateFunc UpdateFunc) error {
-	id := rand.Uint64()
-
-	req := &delegationv1.FetchX509SVIDsRequest{
-		Operation: delegationv1.FetchX509SVIDsRequest_ADD,
-		Id:        id,
-		Selectors: getPodSelectors(pod),
-	}
-
-	s.updateFuncs[id] = updateFunc
-	s.ids[pod] = id
-
-	err := s.stream.Send(req)
-	if err != nil {
-		return err
-	}
-
-	return nil
+func (s *Watcher) Start() {
+	go s.run()
 }
 
-func (s *spiffeWatcher) unwatch(pod *slim_corev1.Pod) error {
-	if pod == nil {
-		return nil
-	}
-	id, ok := s.ids[pod]
-	if !ok {
-		return fmt.Errorf("spiffe ID for pod %s not found", pod.Name)
-	}
+func (s *Watcher) startProcessRequests() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 
-	req := &delegationv1.FetchX509SVIDsRequest{
-		Operation: delegationv1.FetchX509SVIDsRequest_DEL,
-		Id:        id,
-	}
+	// rewatch for all pods
+	for pod, id := range s.ids {
+		protoReq := &delegationv1.FetchX509SVIDsRequest{
+			Operation: delegationv1.FetchX509SVIDsRequest_ADD,
+			Id:        id,
+			Selectors: getPodSelectors(pod),
+		}
 
-	err := s.stream.Send(req)
-	if err != nil {
-		return err
-	}
-
-	delete(s.updateFuncs, id)
-	delete(s.ids, pod)
-
-	return nil
-}
-
-func (s *spiffeWatcher) watchAllSVIDs() {
-	for {
-		resp, err := s.stream.Recv()
+		err := s.stream.Send(protoReq)
 		if err != nil {
+			log.WithError(err).Debugf("spiffe: failed to add pod to watch set")
+			// what to do here?
+			continue
+		}
+	}
+
+	// start processing ADD/DEL requests again
+	s.processRequestsDone = false
+	go s.processRequests()
+}
+
+func (s *Watcher) processRequests() {
+	for {
+		// TODO: this lock is locking way too much. Try to avoid helding it when
+		// performing network operations
+		s.mutex.Lock()
+		for len(s.requests) == 0 && !s.processRequestsDone {
+			s.cv.Wait()
+		}
+
+		if s.processRequestsDone {
+			s.mutex.Unlock()
 			return
 		}
 
-		updateFunc, ok := s.updateFuncs[resp.Id]
-		if !ok {
-			continue
+		// get first element of map
+		var req request
+		for _, v := range s.requests {
+			req = v
+			break
 		}
 
-		spiffeSvids := make([]*SpiffeSVID, len(resp.X509Svids))
-		for idx, svid := range resp.X509Svids {
-			spiffeSvids[idx] = &SpiffeSVID{
-				SpiffeID: spiffeIDToString(svid.X509Svid.Id),
+		switch req.typ {
+		case ADD:
+			log.Debug("spiffe: processing ADD operation")
+			id := rand.Uint64()
+
+			protoReq := &delegationv1.FetchX509SVIDsRequest{
+				Operation: delegationv1.FetchX509SVIDsRequest_ADD,
+				Id:        id,
+				Selectors: getPodSelectors(req.pod),
 			}
+
+			err := s.stream.Send(protoReq)
+			if err != nil {
+				log.WithError(err).Debugf("spiffe: failed to add pod to watch set")
+				s.mutex.Unlock()
+				return
+			}
+
+			s.ids[req.pod] = id
+			s.updateFuncs[id] = req.updateFunc
+
+		case DEL:
+			id, ok := s.ids[req.pod]
+			if !ok {
+				log.Debugf("spiffe: spiffe ID for pod %s not found", req.pod.Name)
+				continue
+			}
+
+			protoReq := &delegationv1.FetchX509SVIDsRequest{
+				Operation: delegationv1.FetchX509SVIDsRequest_DEL,
+				Id:        id,
+			}
+
+			err := s.stream.Send(protoReq)
+			if err != nil {
+				log.WithError(err).Debugf("spiffe: failed to remove pod from watch set")
+				s.mutex.Unlock()
+				return
+			}
+
+			delete(s.ids, req.pod)
+			delete(s.updateFuncs, id)
 		}
 
-		updateFunc(spiffeSvids)
+		// request was processed, remove it!
+		delete(s.requests, req.pod)
+		s.mutex.Unlock()
 	}
 }
 
-func newDelegationClient(socketPath string) (delegationv1.DelegationClient, error) {
-	unixPath := "unix://" + socketPath
+func (s *Watcher) run() {
+	firstTime := true
 
-	conn, err := grpc.Dial(unixPath, grpc.WithInsecure())
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to delegation SPIRE api: %w", err)
+	for {
+		if firstTime == false {
+			// stop processing ADD/DEL requests
+			s.processRequestsDone = true
+			s.cv.Signal()
+
+			// TODO: use backoff?
+			time.Sleep(timeDelay)
+		} else {
+			firstTime = false
+		}
+
+		log.Debugf("spiffe: trying to connect")
+
+		unixPath := "unix://" + option.Config.SpirePrivilegedAPISocketPath
+		conn, err := grpc.Dial(unixPath, grpc.WithInsecure())
+		if err != nil {
+			log.WithError(err).Warning("spiffe: failed to connect to delegation SPIRE socket")
+			continue
+		}
+
+		client := delegationv1.NewDelegationClient(conn)
+
+		ctx := context.Background()
+		s.stream, err = client.FetchX509SVIDs(ctx)
+		if err != nil {
+			log.WithError(err).Warning("spiffe: failed to create delegation SPIRE api client")
+			continue
+		}
+
+		// get greeting message from stream
+		if _, err := s.stream.Recv(); err != nil {
+			log.WithError(err).Warning("spiffe: failed to read delegation SPIRE api (greeting message)")
+			continue
+		}
+
+		// Everything is working fine at this point
+		log.Debug("spiffe: everything is working fine")
+		s.startProcessRequests()
+
+		for {
+			resp, err := s.stream.Recv()
+			if err != nil {
+				// TODO: specific error message if cilium agent registration entry is missing.
+				log.WithError(err).Warning("spiffe: failed to read delegation SPIRE api")
+				break
+			}
+
+			s.mutex.Lock()
+			updateFunc, ok := s.updateFuncs[resp.Id]
+			s.mutex.Unlock()
+			if !ok {
+				continue
+			}
+
+			spiffeSvids := make([]*SpiffeSVID, len(resp.X509Svids))
+			for idx, svid := range resp.X509Svids {
+				spiffeSvids[idx] = &SpiffeSVID{
+					SpiffeID:  spiffeIDToString(svid.X509Svid.Id),
+					ExpiresAt: svid.X509Svid.ExpiresAt,
+				}
+			}
+
+			updateFunc(spiffeSvids)
+		}
+	}
+}
+
+// Watch adds the pod to the watched list. updateFunc will be called when there
+// is an update for such a pod.
+func (s *Watcher) Watch(pod *slim_corev1.Pod, updateFunc UpdateFunc) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	// If we already have an DEL request, remove it
+	if req, ok := s.requests[pod]; ok && req.typ == DEL {
+		delete(s.requests, pod)
+		return nil
 	}
 
-	return delegationv1.NewDelegationClient(conn), nil
+	s.requests[pod] = request{
+		typ:        ADD,
+		pod:        pod,
+		updateFunc: updateFunc,
+	}
+
+	s.cv.Signal()
+
+	return nil
+}
+
+// Unwatch removes a pod from the watched list.
+func (s *Watcher) Unwatch(pod *slim_corev1.Pod) error {
+	if pod == nil {
+		return nil
+	}
+
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	// If we already have an ADD request, remove it
+	if req, ok := s.requests[pod]; ok && req.typ == ADD {
+		delete(s.requests, pod)
+		return nil
+	}
+
+	s.requests[pod] = request{
+		typ: DEL,
+		pod: pod,
+	}
+
+	s.cv.Signal()
+
+	return nil
 }
 
 func makeSelector(format string, args ...interface{}) *types.Selector {
