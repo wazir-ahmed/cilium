@@ -626,7 +626,7 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc, epMgr *endpointma
 	}
 
 	if option.Config.EnableSpiffe {
-		d.spiffeWatcher = spiffe.NewWatcher()
+		d.spiffeWatcher = spiffe.NewWatcher(d.l7Proxy.XDSServer)
 		d.spiffeWatcher.Start()
 	}
 

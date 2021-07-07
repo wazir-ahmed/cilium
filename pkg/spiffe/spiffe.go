@@ -37,6 +37,9 @@ import (
 const (
 	spiffeSubsys = "spiffe"
 	timeDelay    = 10 * time.Second
+
+	// TODO(Mauricio): This should be configurable.
+	localTrustDomain = "spiffe://example.org"
 )
 
 var (
@@ -51,6 +54,10 @@ type SpiffeSVID struct {
 }
 
 type UpdateFunc func([]*SpiffeSVID)
+
+type BundleUpdater interface {
+	UpdateBundle(trustDomainName string, bundle []byte)
+}
 
 const (
 	ADD int = 1
@@ -72,18 +79,21 @@ type Watcher struct {
 
 	requests map[*slim_corev1.Pod]request
 
+	bundleUpdater BundleUpdater
+
 	mutex *lock.Mutex
 	cv    *sync.Cond
 
 	processRequestsDone bool
 }
 
-func NewWatcher() *Watcher {
+func NewWatcher(bundleUpdater BundleUpdater) *Watcher {
 	w := &Watcher{
-		updateFuncs: make(map[uint64]UpdateFunc),
-		ids:         make(map[*slim_corev1.Pod]uint64),
-		requests:    make(map[*slim_corev1.Pod]request),
-		mutex:       &lock.Mutex{},
+		updateFuncs:   make(map[uint64]UpdateFunc),
+		ids:           make(map[*slim_corev1.Pod]uint64),
+		requests:      make(map[*slim_corev1.Pod]request),
+		bundleUpdater: bundleUpdater,
+		mutex:         &lock.Mutex{},
 	}
 
 	w.cv = sync.NewCond(w.mutex)
@@ -92,6 +102,7 @@ func NewWatcher() *Watcher {
 
 func (s *Watcher) Start() {
 	go s.run()
+	go s.runBundlesWatcher()
 }
 
 func (s *Watcher) startProcessRequests() {
@@ -250,10 +261,18 @@ func (s *Watcher) run() {
 
 			spiffeSvids := make([]*SpiffeSVID, len(resp.X509Svids))
 			for idx, svid := range resp.X509Svids {
+				var certChain []byte
+				for _, cert := range svid.X509Svid.CertChain {
+					certChain = append(certChain, cert...)
+				}
+
 				spiffeSvids[idx] = &SpiffeSVID{
 					SpiffeID:  spiffeIDToString(svid.X509Svid.Id),
+					CertChain: certChain,
+					Key:       svid.X509SvidKey,
 					ExpiresAt: svid.X509Svid.ExpiresAt,
 				}
+
 			}
 
 			updateFunc(spiffeSvids)
@@ -350,4 +369,51 @@ func getPodSelectors(pod *slim_corev1.Pod) []*types.Selector {
 
 func spiffeIDToString(id *types.SPIFFEID) string {
 	return "spiffe://" + id.TrustDomain + id.Path
+}
+
+func (s *Watcher) runBundlesWatcher() {
+	firstTime := true
+
+	for {
+		if firstTime == false {
+			// TODO: use backoff?
+			time.Sleep(timeDelay)
+		} else {
+			firstTime = false
+		}
+
+		log.Debugf("spiffe(bundles): trying to connect")
+
+		unixPath := "unix://" + option.Config.SpirePrivilegedAPISocketPath
+		conn, err := grpc.Dial(unixPath, grpc.WithInsecure())
+		if err != nil {
+			log.WithError(err).Warning("spiffe: failed to connect to delegation SPIRE socket")
+			continue
+		}
+
+		client := delegationv1.NewDelegationClient(conn)
+
+		ctx := context.Background()
+		stream, err := client.FetchX509Bundles(ctx, &delegationv1.FetchX509BundlesRequest{})
+		if err != nil {
+			log.WithError(err).Warning("spiffe(bundles): failed to create delegation SPIRE api client")
+			continue
+		}
+
+		// Everything is working fine at this point
+		log.Debug("spiffe(bundles): everything is working fine")
+
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				// TODO: specific error message if cilium agent registration entry is missing.
+				log.WithError(err).Warning("spiffe(bundles): failed to read delegation SPIRE api")
+				break
+			}
+			if resp.TrustDomainName == localTrustDomain {
+				resp.TrustDomainName = "LOCAL"
+			}
+			s.bundleUpdater.UpdateBundle(resp.TrustDomainName, resp.Bundle)
+		}
+	}
 }
