@@ -188,7 +188,12 @@ func StartXDSServer(stateDir string) *XDSServer {
 		AckObserver: &SVIDsCache,
 	}
 
-	stopServer := startXDSGRPCServer(socketListener, ldsConfig, npdsConfig, nphdsConfig, svidsConfig, 5*time.Second)
+	bundlesConfig := &xds.ResourceTypeConfiguration{
+		Source:      BundlesCache,
+		AckObserver: &BundlesCache,
+	}
+
+	stopServer := startXDSGRPCServer(socketListener, ldsConfig, npdsConfig, nphdsConfig, svidsConfig, bundlesConfig, 5*time.Second)
 
 	return &XDSServer{
 		socketPath:             xdsPath,
@@ -1569,26 +1574,20 @@ func convertSVIDs(svids []*spiffe.SpiffeSVID) ([]*cilium.X509SVID, error) {
 
 	// TODO(Mauricio): reflection, deep copy?
 	for _, svid := range svids {
-		x509Svid, err := convertCertificates(svid.X509Svid)
+		cert, err := convertCertificates(svid.CertChain)
 		if err != nil {
 			return nil, err
 		}
 
-		x509Key, err := convertKey(svid.X509SvidKey)
-		if err != nil {
-			return nil, err
-		}
-
-		bundle, err := convertCertificates(svid.Bundle)
+		key, err := convertKey(svid.Key)
 		if err != nil {
 			return nil, err
 		}
 
 		newSvid := cilium.X509SVID{
-			SpiffeId:    svid.SpiffeId,
-			X509Svid:    x509Svid,
-			X509SvidKey: x509Key,
-			Bundle:      bundle,
+			SpiffeId: svid.SpiffeID,
+			Cert:     cert,
+			Key:      key,
 		}
 
 		newSvids = append(newSvids, &newSvid)
@@ -1636,4 +1635,24 @@ func convertKey(dem []byte) ([]byte, error) {
 	}
 
 	return pem.EncodeToMemory(b), nil
+}
+
+func (s *XDSServer) UpdateBundle(trustDomainName string, bundle []byte) {
+	if bundle == nil || len(bundle) == 0 {
+		BundlesCache.Delete(BundlesTypeURL, trustDomainName)
+		return
+	}
+
+	cert, err := convertCertificates(bundle)
+	if err != nil {
+		log.WithError(err).Debug("fail to convert bundle")
+		return
+	}
+
+	envoyBundle := cilium.Bundles{
+		TrustDomainName: trustDomainName,
+		Bundle:          cert,
+	}
+
+	BundlesCache.Upsert(BundlesTypeURL, trustDomainName, &envoyBundle)
 }

@@ -38,6 +38,8 @@ const (
 	NetworkPolicyHostsTypeURL = "type.googleapis.com/cilium.NetworkPolicyHosts"
 
 	SVIDsTypeURL = "type.googleapis.com/cilium.SVIDs"
+
+	BundlesTypeURL = "type.googleapis.com/cilium.Bundles"
 )
 
 // sVIDsCache is a cache of resources in the SVIDs Discovery Service
@@ -50,6 +52,19 @@ func newSVIDsCache() sVIDsCache {
 }
 
 func (cache *sVIDsCache) HandleResourceVersionAck(ackVersion uint64, nackVersion uint64, nodeIP string, resourceNames []string, typeURL string, detail string) {
+	// Do nothing!
+}
+
+// bundlesCache is a cache of resources in the Bundles Discovery Service
+type bundlesCache struct {
+	*xds.Cache
+}
+
+func newBundlesCache() bundlesCache {
+	return bundlesCache{Cache: xds.NewCache()}
+}
+
+func (cache *bundlesCache) HandleResourceVersionAck(ackVersion uint64, nackVersion uint64, nodeIP string, resourceNames []string, typeURL string, detail string) {
 	// Do nothing!
 }
 
@@ -70,6 +85,8 @@ var (
 	NetworkPolicyHostsCache = newNPHDSCache()
 
 	SVIDsCache = newSVIDsCache()
+
+	BundlesCache = newBundlesCache()
 
 	observerOnce = sync.Once{}
 )

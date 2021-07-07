@@ -38,7 +38,7 @@ var (
 // startXDSGRPCServer starts a gRPC server to serve xDS APIs using the given
 // resource watcher and network listener.
 // Returns a function that stops the GRPC server when called.
-func startXDSGRPCServer(listener net.Listener, ldsConfig, npdsConfig, nphdsConfig, svidsConfig *xds.ResourceTypeConfiguration, resourceAccessTimeout time.Duration) context.CancelFunc {
+func startXDSGRPCServer(listener net.Listener, ldsConfig, npdsConfig, nphdsConfig, svidsConfig, bundlesConfig *xds.ResourceTypeConfiguration, resourceAccessTimeout time.Duration) context.CancelFunc {
 	grpcServer := grpc.NewServer()
 
 	xdsServer := xds.NewServer(map[string]*xds.ResourceTypeConfiguration{
@@ -46,6 +46,7 @@ func startXDSGRPCServer(listener net.Listener, ldsConfig, npdsConfig, nphdsConfi
 		NetworkPolicyTypeURL:      npdsConfig,
 		NetworkPolicyHostsTypeURL: nphdsConfig,
 		SVIDsTypeURL:              svidsConfig,
+		BundlesTypeURL:            bundlesConfig,
 	}, resourceAccessTimeout)
 	dsServer := (*xdsGRPCServer)(xdsServer)
 
@@ -56,6 +57,7 @@ func startXDSGRPCServer(listener net.Listener, ldsConfig, npdsConfig, nphdsConfi
 	cilium.RegisterNetworkPolicyDiscoveryServiceServer(grpcServer, dsServer)
 	cilium.RegisterNetworkPolicyHostsDiscoveryServiceServer(grpcServer, dsServer)
 	cilium.RegisterSVIDDiscoveryServiceServer(grpcServer, dsServer)
+	cilium.RegisterBundlesDiscoveryServiceServer(grpcServer, dsServer)
 
 	reflection.Register(grpcServer)
 
@@ -118,6 +120,16 @@ func (s *xdsGRPCServer) StreamSVIDs(stream cilium.SVIDDiscoveryService_StreamSVI
 }
 
 func (s *xdsGRPCServer) FetchSVIDs(ctx context.Context, req *envoy_service_discovery.DiscoveryRequest) (*envoy_service_discovery.DiscoveryResponse, error) {
+	// The Fetch methods are only called via the REST API, which is not
+	// implemented in Cilium. Only the Stream methods are called over gRPC.
+	return nil, ErrNotImplemented
+}
+
+func (s *xdsGRPCServer) StreamBundles(stream cilium.BundlesDiscoveryService_StreamBundlesServer) error {
+	return (*xds.Server)(s).HandleRequestStream(stream.Context(), stream, BundlesTypeURL)
+}
+
+func (s *xdsGRPCServer) FetchBundles(ctx context.Context, req *envoy_service_discovery.DiscoveryRequest) (*envoy_service_discovery.DiscoveryResponse, error) {
 	// The Fetch methods are only called via the REST API, which is not
 	// implemented in Cilium. Only the Stream methods are called over gRPC.
 	return nil, ErrNotImplemented
