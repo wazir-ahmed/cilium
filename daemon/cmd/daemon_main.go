@@ -435,7 +435,7 @@ func init() {
 	flags.Int(option.ProxyPrometheusPort, 0, "Port to serve Envoy metrics on. Default 0 (disabled).")
 	option.BindEnv(option.ProxyPrometheusPort)
 
-	flags.Bool(option.DisableEnvoyVersionCheck, false, "Do not perform Envoy binary version check on startup")
+	flags.Bool(option.DisableEnvoyVersionCheck, true, "Do not perform Envoy binary version check on startup")
 	flags.MarkHidden(option.DisableEnvoyVersionCheck)
 	// Disable version check if Envoy build is disabled
 	option.BindEnvWithLegacyEnvFallback(option.DisableEnvoyVersionCheck, "CILIUM_DISABLE_ENVOY_BUILD")
@@ -1812,6 +1812,8 @@ func (d *Daemon) instantiateAPI() *restapi.CiliumAPIAPI {
 
 		// /policy/resolve/
 		restAPI.PolicyGetPolicyResolveHandler = NewGetPolicyResolveHandler(d)
+		// /policy/id
+		restAPI.PolicyGetPolicyIDHandler = newGetPolicyNamesHandler(d.policy)
 
 		// /lrp/
 		restAPI.ServiceGetLrpHandler = NewGetLrpHandler(d.redirectPolicyManager)

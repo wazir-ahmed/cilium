@@ -26,6 +26,7 @@ ipv6_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id, __u32 *monitor)
 	union v6addr orig_dip;
 	void *data, *data_end;
 	struct ipv6hdr *ip6;
+    __u16       rule_id = 0;
 
 	/* Only enforce host policies for packets from host IPs. */
 	if (src_id != HOST_ID)
@@ -57,13 +58,13 @@ ipv6_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id, __u32 *monitor)
 
 	/* Perform policy lookup. */
 	verdict = policy_can_egress6(ctx, &tuple, src_id, dst_id,
-				     &policy_match_type, &audited);
+				     &policy_match_type, &audited, &rule_id);
 
 	/* Reply traffic and related are allowed regardless of policy verdict. */
-	if (ret != CT_REPLY && ret != CT_RELATED && verdict < 0) {
+	if (ret != CT_REPLY && ret != CT_RELATED && verdict < 0 && !audited) {
 		send_policy_verdict_notify(ctx, dst_id, tuple.dport,
 					   tuple.nexthdr, POLICY_EGRESS, 1,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
 		return verdict;
 	}
 
@@ -71,7 +72,11 @@ ipv6_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id, __u32 *monitor)
 	case CT_NEW:
 		send_policy_verdict_notify(ctx, dst_id, tuple.dport,
 					   tuple.nexthdr, POLICY_EGRESS, 1,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
+        if (audited) {
+            verdict = CTX_ACT_OK;
+        }
+
 		ct_state_new.src_sec_id = HOST_ID;
 		ret = ct_create6(get_ct_map6(&tuple), &CT_MAP_ANY6, &tuple,
 				 ctx, CT_EGRESS, &ct_state_new, verdict > 0);
@@ -82,7 +87,7 @@ ipv6_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id, __u32 *monitor)
 	case CT_REOPENED:
 		send_policy_verdict_notify(ctx, dst_id, tuple.dport,
 					   tuple.nexthdr, POLICY_EGRESS, 1,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
 	case CT_ESTABLISHED:
 	case CT_RELATED:
 	case CT_REPLY:
@@ -104,10 +109,12 @@ ipv6_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 	__u32 monitor = 0, dst_id = WORLD_ID;
 	struct remote_endpoint_info *info;
 	int ret, verdict, l4_off, hdrlen;
+    int proxy_port = 0;
 	struct ipv6_ct_tuple tuple = {};
 	union v6addr orig_sip;
 	void *data, *data_end;
 	struct ipv6hdr *ip6;
+    __u16       rule_id = 0;
 
 	if (!revalidate_data(ctx, &data, &data_end, &ip6))
 		return DROP_INVALID;
@@ -147,13 +154,18 @@ ipv6_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 	/* Perform policy lookup */
 	verdict = policy_can_access_ingress(ctx, *src_id, dst_id, tuple.dport,
 					    tuple.nexthdr, false,
-					    &policy_match_type, &audited);
+					    &policy_match_type, &audited, &rule_id);
+
+    if (verdict > 0) {
+        // redirection to the proxy
+        proxy_port = verdict;
+    }
 
 	/* Reply traffic and related are allowed regardless of policy verdict. */
-	if (ret != CT_REPLY && ret != CT_RELATED && verdict < 0) {
+	if (ret != CT_REPLY && ret != CT_RELATED && verdict < 0 && !audited) {
 		send_policy_verdict_notify(ctx, *src_id, tuple.dport,
 					   tuple.nexthdr, POLICY_INGRESS, 1,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
 		return verdict;
 	}
 
@@ -161,20 +173,24 @@ ipv6_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 	case CT_NEW:
 		send_policy_verdict_notify(ctx, *src_id, tuple.dport,
 					   tuple.nexthdr, POLICY_INGRESS, 1,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
+
+        if (audited) {
+            verdict = CTX_ACT_OK;
+        }
 
 		/* Create new entry for connection in conntrack map. */
 		ct_state_new.src_sec_id = *src_id;
 		ct_state_new.node_port = ct_state.node_port;
 		ret = ct_create6(get_ct_map6(&tuple), &CT_MAP_ANY6, &tuple,
-				 ctx, CT_INGRESS, &ct_state_new, verdict > 0);
+				 ctx, CT_INGRESS, &ct_state_new, proxy_port > 0);
 		if (IS_ERR(ret))
 			return ret;
 
 	case CT_REOPENED:
 		send_policy_verdict_notify(ctx, *src_id, tuple.dport,
 					   tuple.nexthdr, POLICY_INGRESS, 1,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
 	case CT_ESTABLISHED:
 	case CT_RELATED:
 	case CT_REPLY:
@@ -245,6 +261,7 @@ ipv4_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id,
 {
 	struct ct_state ct_state_new = {}, ct_state = {};
 	int ret, verdict, l4_off, l3_off = ETH_HLEN;
+    int proxy_port = 0;
 	__u8 policy_match_type = POLICY_MATCH_NONE;
 	__u8 audited = 0;
 	struct remote_endpoint_info *info;
@@ -252,6 +269,7 @@ ipv4_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id,
 	__u32 dst_id = 0;
 	void *data, *data_end;
 	struct iphdr *ip4;
+    __u16       rule_id = 0;
 
 	if (src_id != HOST_ID) {
 #  ifndef ENABLE_MASQUERADE
@@ -284,13 +302,18 @@ ipv4_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id,
 
 	/* Perform policy lookup. */
 	verdict = policy_can_egress4(ctx, &tuple, src_id, dst_id,
-				     &policy_match_type, &audited);
+				     &policy_match_type, &audited, &rule_id);
+
+    if (verdict > 0) {
+        // redirection to the proxy
+        proxy_port = verdict;
+    }
 
 	/* Reply traffic and related are allowed regardless of policy verdict. */
-	if (ret != CT_REPLY && ret != CT_RELATED && verdict < 0) {
+	if (ret != CT_REPLY && ret != CT_RELATED && verdict < 0 && !audited) {
 		send_policy_verdict_notify(ctx, dst_id, tuple.dport,
 					   tuple.nexthdr, POLICY_EGRESS, 0,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
 		return verdict;
 	}
 
@@ -298,10 +321,15 @@ ipv4_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id,
 	case CT_NEW:
 		send_policy_verdict_notify(ctx, dst_id, tuple.dport,
 					   tuple.nexthdr, POLICY_EGRESS, 0,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
+
+        if (audited) {
+            verdict = CTX_ACT_OK;
+        }
+
 		ct_state_new.src_sec_id = HOST_ID;
 		ret = ct_create4(get_ct_map4(&tuple), &CT_MAP_ANY4, &tuple,
-				 ctx, CT_EGRESS, &ct_state_new, verdict > 0);
+				 ctx, CT_EGRESS, &ct_state_new, proxy_port > 0);
 		if (IS_ERR(ret))
 			return ret;
 		break;
@@ -309,7 +337,7 @@ ipv4_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id,
 	case CT_REOPENED:
 		send_policy_verdict_notify(ctx, dst_id, tuple.dport,
 					   tuple.nexthdr, POLICY_EGRESS, 0,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
 	case CT_ESTABLISHED:
 	case CT_RELATED:
 	case CT_REPLY:
@@ -327,6 +355,7 @@ ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 {
 	struct ct_state ct_state_new = {}, ct_state = {};
 	int ret, verdict, l4_off, l3_off = ETH_HLEN;
+    int proxy_port = 0;
 	__u8 policy_match_type = POLICY_MATCH_NONE;
 	__u8 audited = 0;
 	__u32 monitor = 0, dst_id = WORLD_ID;
@@ -335,6 +364,7 @@ ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 	bool is_untracked_fragment = false;
 	void *data, *data_end;
 	struct iphdr *ip4;
+    __u16       rule_id = 0;
 
 	if (!revalidate_data(ctx, &data, &data_end, &ip4))
 		return DROP_INVALID;
@@ -377,13 +407,18 @@ ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 	verdict = policy_can_access_ingress(ctx, *src_id, dst_id, tuple.dport,
 					    tuple.nexthdr,
 					    is_untracked_fragment,
-					    &policy_match_type, &audited);
+					    &policy_match_type, &audited, &rule_id);
+
+    if (verdict > 0) {
+        // redirection to the proxy
+        proxy_port = verdict;
+    }
 
 	/* Reply traffic and related are allowed regardless of policy verdict. */
-	if (ret != CT_REPLY && ret != CT_RELATED && verdict < 0) {
+	if (ret != CT_REPLY && ret != CT_RELATED && verdict < 0 && !audited) {
 		send_policy_verdict_notify(ctx, *src_id, tuple.dport,
 					   tuple.nexthdr, POLICY_INGRESS, 0,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
 		return verdict;
 	}
 
@@ -391,20 +426,24 @@ ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 	case CT_NEW:
 		send_policy_verdict_notify(ctx, *src_id, tuple.dport,
 					   tuple.nexthdr, POLICY_INGRESS, 0,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
+
+        if (audited) {
+            verdict = CTX_ACT_OK;
+        }
 
 		/* Create new entry for connection in conntrack map. */
 		ct_state_new.src_sec_id = *src_id;
 		ct_state_new.node_port = ct_state.node_port;
 		ret = ct_create4(get_ct_map4(&tuple), &CT_MAP_ANY4, &tuple,
-				 ctx, CT_INGRESS, &ct_state_new, verdict > 0);
+				 ctx, CT_INGRESS, &ct_state_new, proxy_port > 0);
 		if (IS_ERR(ret))
 			return ret;
 
 	case CT_REOPENED:
 		send_policy_verdict_notify(ctx, *src_id, tuple.dport,
 					   tuple.nexthdr, POLICY_INGRESS, 0,
-					   verdict, policy_match_type, audited);
+					   verdict, policy_match_type, audited, rule_id);
 	case CT_ESTABLISHED:
 	case CT_RELATED:
 	case CT_REPLY:

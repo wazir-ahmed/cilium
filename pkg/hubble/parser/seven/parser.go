@@ -26,6 +26,7 @@ import (
 	"github.com/cilium/cilium/pkg/hubble/parser/errors"
 	"github.com/cilium/cilium/pkg/hubble/parser/getters"
 	"github.com/cilium/cilium/pkg/hubble/parser/options"
+	"github.com/cilium/cilium/pkg/monitor"
 	"github.com/cilium/cilium/pkg/monitor/api"
 	"github.com/cilium/cilium/pkg/proxy/accesslog"
 	"github.com/cilium/cilium/pkg/u8proto"
@@ -149,6 +150,11 @@ func (p *Parser) Decode(r *accesslog.LogRecord, decoded *pb.Flow) error {
 	decoded.DestinationService = destinationService
 	decoded.TrafficDirection = decodeTrafficDirection(r.ObservationPoint)
 	decoded.PolicyMatchType = 0
+	policyName, _ := monitor.GetPolicyName(r.HTTP.RuleID)
+	decoded.AuditMode = r.HTTP.AuditMode
+	if len(policyName) > 0 {
+		decoded.PolicyName = policyName
+	}
 	decoded.Summary = p.getSummary(r, decoded)
 
 	return nil
@@ -200,6 +206,8 @@ func decodeTime(timestamp string) (goTime time.Time, pbTime *timestamppb.Timesta
 
 func decodeVerdict(verdict accesslog.FlowVerdict) pb.Verdict {
 	switch verdict {
+	//case accesslog.VerdictAudited:
+	//	return pb.Verdict_AUDIT
 	case accesslog.VerdictDenied:
 		return pb.Verdict_DROPPED
 	case accesslog.VerdictForwarded:
@@ -361,6 +369,14 @@ func decodeHTTP(flowType accesslog.FlowType, http *accesslog.LogRecordHTTP) *pb.
 			Headers:  headers,
 		},
 	}
+}
+func isRuleAllowed(r *accesslog.LogRecord) string {
+	if 200 == uint32(r.HTTP.Code) {
+		return "Allowed"
+	} else {
+		return "Denied"
+	}
+
 }
 
 func decodeLayer7(r *accesslog.LogRecord) *pb.Layer7 {

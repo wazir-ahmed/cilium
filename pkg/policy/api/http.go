@@ -112,6 +112,16 @@ type PortRuleHTTP struct {
 	//
 	// +kubebuilder:validation:Optional
 	HeaderMatches []*HeaderMatch `json:"headerMatches,omitempty"`
+
+	// RuleID is an integer which holds the policy name in a map
+	//
+	// +kubebuilder:validation:Optional
+	RuleID uint16 `json:"ruleID,omitempty"`
+
+	// AuditMode is a boolean used in envoy to process the rule in audit mode
+	//
+	// +kubebuilder:validation:Optional
+	AuditMode bool `json:"auditMode,omitempty"`
 }
 
 // Sanitize sanitizes HTTP rules. It ensures that the path and method fields

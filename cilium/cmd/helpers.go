@@ -220,6 +220,8 @@ type PolicyUpdateArgs struct {
 	protocols []uint8
 
 	isDeny bool
+
+	auditMode bool
 }
 
 // parseTrafficString converts the provided string to its corresponding
@@ -349,9 +351,9 @@ func updatePolicyKey(pa *PolicyUpdateArgs, add bool) {
 				err       error
 			)
 			if pa.isDeny {
-				err = policyMap.Deny(pa.label, pa.port, u8p, pa.trafficDirection)
+				err = policyMap.Deny(pa.label, pa.port, u8p, pa.trafficDirection, pa.auditMode, 0)
 			} else {
-				err = policyMap.Allow(pa.label, pa.port, u8p, pa.trafficDirection, proxyPort)
+				err = policyMap.Allow(pa.label, pa.port, u8p, pa.trafficDirection, proxyPort, 0, pa.auditMode)
 			}
 			if err != nil {
 				Fatalf("Cannot add policy key '%s': %s\n", entry, err)

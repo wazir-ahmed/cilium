@@ -143,6 +143,8 @@ func logRecord(endpointInfoRegistry logger.EndpointInfoRegistry, localEndpoint l
 			Headers:         GetNetHttpHeaders(http.Headers),
 			MissingHeaders:  GetNetHttpHeaders(http.MissingHeaders),
 			RejectedHeaders: GetNetHttpHeaders(http.RejectedHeaders),
+			AuditMode:       http.AuditMode,
+			RuleID:          uint16(http.RuleId),
 		})
 	} else if kafka := pblog.GetKafka(); kafka != nil {
 		kafkaRecord = &accesslog.LogRecordKafka{

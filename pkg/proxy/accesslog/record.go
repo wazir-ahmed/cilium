@@ -38,6 +38,7 @@ const (
 type FlowVerdict string
 
 const (
+	VerdictAudited = "Audited"
 	// VerdictForwarded indicates that the flow was forwarded
 	VerdictForwarded FlowVerdict = "Forwarded"
 
@@ -229,6 +230,9 @@ type LogRecordHTTP struct {
 
 	// RejectedHeaders are HTTP request headers that were rejected from the request
 	RejectedHeaders http.Header
+
+	RuleID    uint16
+	AuditMode bool
 }
 
 // KafkaTopic contains the topic for requests
