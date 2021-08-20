@@ -309,6 +309,13 @@ func (s *Watcher) Unwatch(pod *slim_corev1.Pod) error {
 		return nil
 	}
 
+	if s == nil || s.mutex == nil {
+		// "segmentation violation" occours at s.mutex.Lock()
+		// - monitors others crashs in s.mutex.Lock()
+		log.Errorf("spiffe(Unwatch): problem with object Watcher or mutex")
+		return nil
+	}
+
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
