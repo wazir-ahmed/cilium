@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sync"
 	"time"
@@ -1085,6 +1086,557 @@ var _ = SkipDescribeIf(func() bool {
 				res.ExpectFail("Unexpected connection from %q to 'http://%s/public'",
 					appPods[helpers.App2], clusterIP)
 			})
+		})
+
+		Context("Policy Stats for L7", func() {
+			var (
+				tiefighterPodIP                                                                   string
+				ciliumPod1                                                                        string
+				ciliumPod2                                                                        string
+				tiefighterPod, xwingPod                                                           string
+				deathStarYAMLLink, xwingYAMLLink, l7PolicyPostYAMLLink, l7PolicyPostAuditYAMLLink string
+				tiefighterYAMLLink, spaceshipLabel, deathstarServiceName, deathstarFQDN           string
+			)
+
+			BeforeAll(func() {
+				starWarsDemoDir := helpers.ManifestGet(kubectl.BasePath(), "star-wars-demo")
+				deathStarYAMLLink = filepath.Join(starWarsDemoDir, "01-deathstar.yaml")
+				xwingYAMLLink = filepath.Join(starWarsDemoDir, "02-xwing.yaml")
+				tiefighterYAMLLink = filepath.Join(starWarsDemoDir, "03-tiefighter.yaml")
+				l7PolicyPostYAMLLink = filepath.Join(starWarsDemoDir, "policy/l7-post.yaml")
+				l7PolicyPostAuditYAMLLink = filepath.Join(starWarsDemoDir, "policy/l7-post-audit.yaml")
+
+				deathstarServiceName = "deathstar"
+				deathstarFQDN = fmt.Sprintf("%s.%s.svc.cluster.local", deathstarServiceName, helpers.DefaultNamespace)
+
+				By(l7PolicyPostAuditYAMLLink, spaceshipLabel, deathstarServiceName, deathstarFQDN)
+				By("Applying deployments")
+				res := kubectl.ApplyDefault(deathStarYAMLLink)
+				res.ExpectSuccess("unable to apply %s: %s", deathStarYAMLLink, res.CombineOutput())
+
+				res = kubectl.ApplyDefault(xwingYAMLLink)
+				res.ExpectSuccess("unable to apply %s: %s", xwingYAMLLink, res.CombineOutput())
+
+				res = kubectl.ApplyDefault(tiefighterYAMLLink)
+				res.ExpectSuccess("unable to apply %s: %s", tiefighterYAMLLink, res.CombineOutput())
+
+				By("Waiting for pods to be ready")
+				err := kubectl.WaitforPods(helpers.DefaultNamespace, "", helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Pods are not ready after timeout")
+
+				By("Making sure all endpoints are in ready state")
+				err = kubectl.CiliumEndpointWaitReady()
+				Expect(err).To(BeNil(), "Endpoints are not ready after timeout")
+
+				By("Getting tiefighter pod names")
+				tiefighterPods, err := kubectl.GetPodNames(helpers.DefaultNamespace, "class=tiefighter")
+				Expect(err).Should(BeNil())
+				Expect(tiefighterPods).ShouldNot(BeEmpty(), "Unable to get spaceship pod names")
+				tiefighterPod = tiefighterPods[0]
+
+				By("Getting xwing pod names")
+				xwingPods, err := kubectl.GetPodNames(helpers.DefaultNamespace, "org=alliance")
+				Expect(err).Should(BeNil())
+				Expect(xwingPods).ShouldNot(BeEmpty(), "Unable to get xwing pod names")
+				xwingPod = xwingPods[0]
+
+				ciliumPod1, err = kubectl.GetCiliumPodOnNode(helpers.K8s1)
+				Expect(err).Should(BeNil(), "cannot get CiliumPod")
+				ciliumPod2, err = kubectl.GetCiliumPodOnNode(helpers.K8s2)
+				Expect(err).Should(BeNil(), "cannot get CiliumPod")
+			})
+
+			AfterEach(func() {
+				cmd := fmt.Sprintf("%s delete --all cnp,ccnp,netpol -n %s", helpers.KubectlCmd, namespaceForTest)
+				_ = kubectl.Exec(cmd)
+				cmd = fmt.Sprintf("%s delete --all cnp,ccnp -n default", helpers.KubectlCmd)
+				_ = kubectl.Exec(cmd)
+			})
+
+			mcheckProxyRedirection := func(podName, method, path string, testType bool) {
+				var (
+					filter        string // jsonpath filter
+					expect        string // expected result
+					curlCmd       string
+					hubbleTimeout = 10 * time.Second
+				)
+
+				curlCmd = helpers.CurlWithRetries(fmt.Sprintf("-X %s http://%s/%s", method, deathstarFQDN, path), 5, true)
+
+				observeFile := fmt.Sprintf("hubble-observe-%s", uuid.New().String())
+
+				// curl commands are issued from the first k8s worker where all
+				// the app instances are running
+				By("Starting hubble observe and generating traffic which should redirect to proxy")
+				ctx, cancel := context.WithCancel(context.Background())
+				hubbleRes1 := kubectl.HubbleObserveFollow(
+					ctx, ciliumPod1,
+					// since 0s is important here so no historic events from the
+					// buffer are shown, only follow from the current time
+					"--type l7 --since 0s",
+				)
+
+				hubbleRes2 := kubectl.HubbleObserveFollow(
+					ctx, ciliumPod2,
+					// since 0s is important here so no historic events from the
+					// buffer are shown, only follow from the current time
+					"--type l7 --since 0s",
+				)
+
+				// clean up at the end of the test
+				defer func() {
+					cancel()
+					hubbleRes1.WaitUntilFinish()
+					hubbleRes2.WaitUntilFinish()
+					helpers.WriteToReportFile(hubbleRes1.CombineOutput().Bytes(), observeFile)
+					helpers.WriteToReportFile(hubbleRes2.CombineOutput().Bytes(), observeFile)
+				}()
+
+				// Let the monitor get started since it is started in the background.
+				time.Sleep(2 * time.Second)
+				res := kubectl.ExecPodCmd(
+					"default", podName,
+					curlCmd)
+				// Give time for the monitor to be notified of the proxy flow.
+				time.Sleep(2 * time.Second)
+
+				filter = `{.verdict} {.destination.namespace} {.l7.type} {.l7.http.code} {.l7.http.method}`
+				//filter = `{.destination.namespace} {.l7.type} {.l7.http.url}
+				//{.l7.http.code} {.l7.http.method} {.policyName} {.auditType} {.verdict}`
+				//expect = fmt.Sprintf("FORWARDED default RESPONSE 200 POST %s",
+				//	fmt.Sprintf("http://%s/v1/request-landing", deathstarFQDN),
+				//)
+				if testType {
+					expect = "FORWARDED default RESPONSE 200 POST"
+					res.ExpectSuccess("%q cannot curl %s %s", podName, deathstarFQDN, res.Stdout())
+				} else {
+					expect = "FORWARDED default RESPONSE 404 POST"
+					res.ExpectFail("It should not communicate from %q to curl %s %s", podName, deathstarFQDN, res.Stdout())
+				}
+
+				var err error
+				if len(hubbleRes1.Stdout()) > 0 {
+					err = hubbleRes1.WaitUntilMatchFilterLineTimeout(filter, expect, hubbleTimeout)
+				} else {
+					err = hubbleRes2.WaitUntilMatchFilterLineTimeout(filter, expect, hubbleTimeout)
+				}
+				ExpectWithOffset(1, err).To(BeNil(), "traffic was not redirected to the proxy when it should have been")
+			}
+
+			It("Send traffic corresponding to the URL configured in the policy", func() {
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				mcheckProxyRedirection(tiefighterPod, "POST", "/v1/request-landing", true)
+				By(tiefighterPodIP)
+			})
+
+			It("Send traffic different from the URL configured in the policy", func() {
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				mcheckProxyRedirection(tiefighterPod, "POST", "/v1/xyz", false)
+			})
+
+			It("Send traffic corresponding to the URL configured in the policy in AUDITMODE", func() {
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostAuditYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				mcheckProxyRedirection(tiefighterPod, "POST", "/v1/request-landing", true)
+			})
+
+			It("Send traffic different from the URL configured in the policy in AUDITMODE", func() {
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostAuditYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				mcheckProxyRedirection(tiefighterPod, "POST", "/v1/xyz", false)
+			})
+
+			It("Send traffic corresponding with different request in AUDITMODE", func() {
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostAuditYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				mcheckProxyRedirection(tiefighterPod, "GET", "/v1", true)
+			})
+
+			It("Send corresponding traffic over l7 policies which are mix of First Audit and Non-Audit Mode policy next", func() {
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostAuditYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				mcheckProxyRedirection(tiefighterPod, "POST", "/v1/request-landing", true)
+			})
+
+			It("Send different traffic over l7 policies which are mix of First Audit and Non-Audit Mode policy next", func() {
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostAuditYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				mcheckProxyRedirection(tiefighterPod, "POST", "/v1/xyz", false)
+			})
+
+			It("Send corresponding traffic over l7 policies which are mix of First Non-Audit and Audit Mode policy next", func() {
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostAuditYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				mcheckProxyRedirection(tiefighterPod, "POST", "/v1/request-landing", true)
+			})
+
+			It("Send different traffic over l7 policies which are mix of First Non-Audit and Audit Mode policy next", func() {
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostAuditYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				mcheckProxyRedirection(tiefighterPod, "POST", "/v1/xyz", false)
+			})
+
+			It("Send traffic corresponding with different remoteId in AUDITMODE", func() {
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, l7PolicyPostAuditYAMLLink, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", l7PolicyPostYAMLLink)
+
+				curlCmd := helpers.CurlWithRetries(fmt.Sprintf("-X POST http://%s/v1/request-landing", deathstarFQDN), 5, true)
+
+				time.Sleep(2 * time.Second)
+				res := kubectl.ExecPodCmd(
+					"default", xwingPod,
+					curlCmd)
+
+				res.ExpectFail("%q cannot curl %s %s", tiefighterPod, deathstarFQDN, res.Stdout())
+			})
+		})
+
+		Context("Policy Stats L3/L4", func() {
+			var (
+				ciliumPod1                                                              string
+				ciliumPod2                                                              string
+				tiefighterPod, xwingPod, starWarsDemoDir, spaceshipPod                  string
+				deathStarYAMLLink, xwingYAMLLink                                        string
+				tiefighterYAMLLink, spaceshipLabel, deathstarServiceName, deathstarFQDN string
+			)
+
+			BeforeAll(func() {
+				starWarsDemoDir = helpers.ManifestGet(kubectl.BasePath(), "star-wars-demo")
+				deathStarYAMLLink = filepath.Join(starWarsDemoDir, "01-deathstar.yaml")
+				xwingYAMLLink = filepath.Join(starWarsDemoDir, "02-xwing.yaml")
+				tiefighterYAMLLink = filepath.Join(starWarsDemoDir, "03-tiefighter.yaml")
+
+				deathstarServiceName = "deathstar"
+				deathstarFQDN = fmt.Sprintf("%s.%s.svc.cluster.local", deathstarServiceName, helpers.DefaultNamespace)
+
+				By("Applying deployments")
+				res := kubectl.ApplyDefault(deathStarYAMLLink)
+				res.ExpectSuccess("unable to apply %s: %s", deathStarYAMLLink, res.CombineOutput())
+
+				res = kubectl.ApplyDefault(xwingYAMLLink)
+				res.ExpectSuccess("unable to apply %s: %s", xwingYAMLLink, res.CombineOutput())
+
+				res = kubectl.ApplyDefault(tiefighterYAMLLink)
+				res.ExpectSuccess("unable to apply %s: %s", tiefighterYAMLLink, res.CombineOutput())
+
+				By("Waiting for pods to be ready")
+				err := kubectl.WaitforPods(helpers.DefaultNamespace, "", helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Pods are not ready after timeout")
+
+				By("Making sure all endpoints are in ready state")
+				err = kubectl.CiliumEndpointWaitReady()
+				Expect(err).To(BeNil(), "Endpoints are not ready after timeout")
+
+				By("Getting tiefighter pod names")
+				tiefighterPods, err := kubectl.GetPodNames(helpers.DefaultNamespace, "class=tiefighter")
+				Expect(err).Should(BeNil())
+				Expect(tiefighterPods).ShouldNot(BeEmpty(), "Unable to get spaceship pod names")
+				tiefighterPod = tiefighterPods[0]
+
+				By("Getting xwing pod names")
+				xwingPods, err := kubectl.GetPodNames(helpers.DefaultNamespace, "org=alliance")
+				Expect(err).Should(BeNil())
+				Expect(xwingPods).ShouldNot(BeEmpty(), "Unable to get xwing pod names")
+				xwingPod = xwingPods[0]
+
+				By("Getting spaceship pod names")
+				spaceshipPods, err := kubectl.GetPodNames(helpers.DefaultNamespace, spaceshipLabel)
+				Expect(err).Should(BeNil())
+				Expect(spaceshipPods).ShouldNot(BeEmpty(), "Unable to get spaceship pod names")
+				spaceshipPod = spaceshipPods[0]
+
+				ciliumPod1, err = kubectl.GetCiliumPodOnNode(helpers.K8s1)
+				Expect(err).Should(BeNil(), "cannot get CiliumPod")
+				ciliumPod2, err = kubectl.GetCiliumPodOnNode(helpers.K8s2)
+				Expect(err).Should(BeNil(), "cannot get CiliumPod")
+			})
+
+			AfterEach(func() {
+				cmd := fmt.Sprintf("%s delete --all cnp,ccnp,netpol -n %s", helpers.KubectlCmd, namespaceForTest)
+				_ = kubectl.Exec(cmd)
+				cmd = fmt.Sprintf("%s delete --all cnp,ccnp -n default", helpers.KubectlCmd)
+				_ = kubectl.Exec(cmd)
+			})
+
+			checkL3L4Flow := func(podName, verdict, policyName, auditMode string, testType bool) {
+				var (
+					filter        string // jsonpath filter
+					expect        string // expected result
+					curlCmd       string
+					hubbleTimeout = 10 * time.Second
+				)
+
+				curlCmd = helpers.CurlWithRetries(fmt.Sprintf("-X POST http://%s/request-landing", deathstarFQDN), 5, true)
+
+				observeFile := fmt.Sprintf("hubble-observe-%s", uuid.New().String())
+
+				// curl commands are issued from the first k8s worker where all
+				// the app instances are running
+				By("Starting hubble observe and generating traffic which should redirect to proxy")
+				ctx, cancel := context.WithCancel(context.Background())
+				hubbleRes1 := kubectl.HubbleObserveFollow(
+					ctx, ciliumPod1,
+					// since 0s is important here so no historic events from the
+					// buffer are shown, only follow from the current time
+					"--type policy-verdict --since 0s",
+				)
+
+				hubbleRes2 := kubectl.HubbleObserveFollow(
+					ctx, ciliumPod2,
+					// since 0s is important here so no historic events from the
+					// buffer are shown, only follow from the current time
+					"--type policy-verdict --since 0s",
+				)
+
+				// clean up at the end of the test
+				defer func() {
+					cancel()
+					hubbleRes1.WaitUntilFinish()
+					hubbleRes2.WaitUntilFinish()
+					helpers.WriteToReportFile(hubbleRes1.CombineOutput().Bytes(), observeFile)
+					helpers.WriteToReportFile(hubbleRes2.CombineOutput().Bytes(), observeFile)
+				}()
+
+				// Let the monitor get started since it is started in the background.
+				time.Sleep(2 * time.Second)
+				res := kubectl.ExecPodCmd(
+					"default", podName,
+					curlCmd)
+				// Give time for the monitor to be notified of the proxy flow.
+				time.Sleep(2 * time.Second)
+
+				filter = `{.verdict} {.policyName} {.auditMode}`
+				expect = fmt.Sprintf("%s %s %s", verdict, policyName, auditMode)
+				if testType {
+					res.ExpectSuccess("%q cannot curl %s %s", podName, deathstarFQDN, res.Stdout())
+				} else {
+					res.ExpectFail("It should not communicate from %q to curl %s %s", podName, deathstarFQDN, res.Stdout())
+				}
+
+				By(hubbleRes1.Stdout())
+				By(hubbleRes2.Stdout())
+
+				var err error
+				if len(hubbleRes1.Stdout()) > 0 {
+					err = hubbleRes1.WaitUntilMatchFilterLineTimeout(filter, expect, hubbleTimeout)
+				} else {
+					err = hubbleRes2.WaitUntilMatchFilterLineTimeout(filter, expect, hubbleTimeout)
+				}
+				ExpectWithOffset(1, err).To(BeNil(), "traffic was not redirected to the proxy when it should have been")
+			}
+
+			It("Deny empire in Non-AUDIT mode", func() {
+				defaultPolicyYaml := filepath.Join(starWarsDemoDir, "policy/default-allow-all.yaml")
+				denyEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/deny-empire-80-only.yaml")
+
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, defaultPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", defaultPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, denyEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", denyEmpirePolicyYaml)
+
+				checkL3L4Flow(tiefighterPod, "DROPPED", "deny-empire-80-only", "false", false)
+			})
+
+			It("Allow tiefighter in AUDIT deny mode", func() {
+				defaultPolicyYaml := filepath.Join(starWarsDemoDir, "policy/default-allow-all.yaml")
+				auditDenyEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/a-deny-empire-80-only.yaml")
+
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, defaultPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", defaultPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, auditDenyEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", auditDenyEmpirePolicyYaml)
+
+				checkL3L4Flow(tiefighterPod, "FORWARDED", "a-deny-empire-80-only", "true", true)
+			})
+
+			It("Forward port 80 from empire", func() {
+				defaultPolicyYaml := filepath.Join(starWarsDemoDir, "policy/default-allow-all.yaml")
+				denyXwingPolicyYaml := filepath.Join(starWarsDemoDir, "policy/deny-port-80-xwing.yaml")
+				allowEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/allow-empire-80-only.yaml")
+
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, defaultPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", defaultPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, allowEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", denyXwingPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, denyXwingPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", allowEmpirePolicyYaml)
+
+				checkL3L4Flow(tiefighterPod, "FORWARDED", "allow-empire-80-only", "false", true)
+			})
+
+			It("Deny port 80 from xwing", func() {
+				defaultPolicyYaml := filepath.Join(starWarsDemoDir, "policy/default-allow-all.yaml")
+				denyXwingPolicyYaml := filepath.Join(starWarsDemoDir, "policy/deny-port-80-xwing.yaml")
+				allowEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/allow-empire-80-only.yaml")
+
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, defaultPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", defaultPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, allowEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", denyXwingPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, denyXwingPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", allowEmpirePolicyYaml)
+
+				checkL3L4Flow(xwingPod, "DROPPED", "deny-port-80-xwing", "false", false)
+			})
+
+			It("Allow xwing in AUDIT deny mode", func() {
+				defaultPolicyYaml := filepath.Join(starWarsDemoDir, "policy/default-allow-all.yaml")
+				auditDenyEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/a-deny-port-80-xwing.yaml")
+				allowEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/allow-empire-80-only.yaml")
+
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, defaultPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", defaultPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, allowEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", auditDenyEmpirePolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, auditDenyEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", allowEmpirePolicyYaml)
+
+				checkL3L4Flow(xwingPod, "FORWARDED", "a-deny-port-80-xwing", "true", true)
+			})
+
+			It("Allow tiefighter in Audit deny", func() {
+				defaultPolicyYaml := filepath.Join(starWarsDemoDir, "policy/default-allow-all.yaml")
+				allowEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/allow-empire-80-only.yaml")
+				auditDenyEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/a-deny-empire-80-only.yaml")
+
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, defaultPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", defaultPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, allowEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", allowEmpirePolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, auditDenyEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", auditDenyEmpirePolicyYaml)
+
+				checkL3L4Flow(tiefighterPod, "FORWARDED", "a-deny-empire-80-only", "true", true)
+			})
+
+			It("Xwing hits default allow policy", func() {
+				defaultPolicyYaml := filepath.Join(starWarsDemoDir, "policy/default-allow-all.yaml")
+				allowEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/allow-empire-80-only.yaml")
+				auditDenyEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/a-deny-empire-80-only.yaml")
+
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, defaultPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", defaultPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, allowEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", allowEmpirePolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, auditDenyEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", auditDenyEmpirePolicyYaml)
+
+				checkL3L4Flow(xwingPod, "FORWARDED", "default-allow-all", "false", true)
+			})
+
+			It("Allow tiefighter egress AUDITMODE", func() {
+				auditDenyEgressPolicyYaml := filepath.Join(starWarsDemoDir, "policy/a-deny-80-only-egress-tiefighter.yaml")
+				allowEgressEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/allow-80-only-egress-empire.yaml")
+
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, auditDenyEgressPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", auditDenyEgressPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, allowEgressEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", allowEgressEmpirePolicyYaml)
+
+				checkL3L4Flow(tiefighterPod, "FORWARDED", "a-deny-80-only-egress-tiefighter", "true", true)
+			})
+
+			It("Allow spaceship egress of empire", func() {
+				auditDenyEgressPolicyYaml := filepath.Join(starWarsDemoDir, "policy/a-deny-80-only-egress-tiefighter.yaml")
+				allowEgressEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/allow-80-only-egress-empire.yaml")
+
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, auditDenyEgressPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", auditDenyEgressPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, allowEgressEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", auditDenyEgressPolicyYaml)
+
+				checkL3L4Flow(spaceshipPod, "FORWARDED", "allow-80-only-egress-empire", "false", true)
+			})
+
+			It("Deny XWING pod ", func() {
+				auditDenyEgressPolicyYaml := filepath.Join(starWarsDemoDir, "policy/a-deny-80-only-egress-tiefighter.yaml")
+				allowEgressEmpirePolicyYaml := filepath.Join(starWarsDemoDir, "policy/allow-80-only-egress-empire.yaml")
+
+				_, err := kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, auditDenyEgressPolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", auditDenyEgressPolicyYaml)
+
+				_, err = kubectl.CiliumPolicyAction(
+					helpers.DefaultNamespace, allowEgressEmpirePolicyYaml, helpers.KubectlApply, helpers.HelperTimeout)
+				Expect(err).Should(BeNil(), "Unable to apply %s", allowEgressEmpirePolicyYaml)
+
+				checkL3L4Flow(xwingPod, "FORWARDED", "implicit-default-deny", "false", true)
+			})
+
 		})
 
 		// Tests involving the L7 proxy do not work when built with -race, see issue #13757.

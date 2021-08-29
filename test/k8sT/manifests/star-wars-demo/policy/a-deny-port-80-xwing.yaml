@@ -1,0 +1,18 @@
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: "a-deny-xwing-80-only"
+spec:
+  auditMode: true
+  endpointSelector:
+    matchLabels:
+      org: empire
+  ingressDeny:
+  - fromEndpoints:
+    - matchLabels:
+        org: alliance
+        class: xwing
+    toPorts:
+    - ports:
+      - port: "80"
+        protocol: TCP

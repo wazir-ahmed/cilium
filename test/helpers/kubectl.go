@@ -827,7 +827,7 @@ func (kub *Kubectl) ExecPodCmdContext(ctx context.Context, namespace string, pod
 // kub.WaitUntilFinish() or kub.WaitUntilMatch() then subsequently fetch the
 // output out of the result.
 func (kub *Kubectl) ExecPodCmdBackground(ctx context.Context, namespace string, pod string, cmd string, options ...ExecOptions) *CmdRes {
-	command := fmt.Sprintf("%s exec -n %s %s -- %s", KubectlCmd, namespace, pod, cmd)
+	command := fmt.Sprintf("%s exec -n %s %s -q -- %s", KubectlCmd, namespace, pod, cmd)
 	return kub.ExecInBackground(ctx, command, options...)
 }
 
