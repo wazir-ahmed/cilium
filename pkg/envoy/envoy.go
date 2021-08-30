@@ -54,7 +54,7 @@ var (
 		// spdlog "trace" not mapped
 	}
 
-	tracing = false
+	tracing = true
 )
 
 const (

@@ -481,9 +481,9 @@ func (p *Proxy) CreateOrUpdateRedirect(l4 policy.ProxyPolicy, id string, localEn
 			redir.implementation, err = createDNSRedirect(redir, dnsConfiguration{}, DefaultEndpointInfoRegistry)
 
 		case policy.ParserTypeHTTP:
-			redir.implementation, err = createEnvoyRedirect(redir, p.stateDir, p.XDSServer, p.datapathUpdater.SupportsOriginalSourceAddr(), wg)
+			redir.implementation, err = createEnvoyRedirect(redir, p.stateDir, p.XDSServer, p.datapathUpdater.SupportsOriginalSourceAddr(), wg, l4.HasOriginatingTLS(), l4.HasTerminatingTLS())
 		default:
-			redir.implementation, err = createEnvoyRedirect(redir, p.stateDir, p.XDSServer, p.datapathUpdater.SupportsOriginalSourceAddr(), wg)
+			redir.implementation, err = createEnvoyRedirect(redir, p.stateDir, p.XDSServer, p.datapathUpdater.SupportsOriginalSourceAddr(), wg, l4.HasOriginatingTLS(), l4.HasTerminatingTLS())
 		}
 
 		if err == nil {

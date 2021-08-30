@@ -435,7 +435,7 @@ func init() {
 	flags.Int(option.ProxyPrometheusPort, 0, "Port to serve Envoy metrics on. Default 0 (disabled).")
 	option.BindEnv(option.ProxyPrometheusPort)
 
-	flags.Bool(option.DisableEnvoyVersionCheck, false, "Do not perform Envoy binary version check on startup")
+	flags.Bool(option.DisableEnvoyVersionCheck, true, "Do not perform Envoy binary version check on startup")
 	flags.MarkHidden(option.DisableEnvoyVersionCheck)
 	// Disable version check if Envoy build is disabled
 	option.BindEnvWithLegacyEnvFallback(option.DisableEnvoyVersionCheck, "CILIUM_DISABLE_ENVOY_BUILD")
@@ -979,6 +979,12 @@ func init() {
 
 	flags.Bool(option.ExternalClusterIPName, false, "Enable external access to ClusterIP services (default false)")
 	option.BindEnv(option.ExternalClusterIPName)
+
+	flags.Bool(option.EnableSpiffe, defaults.EnableSpiffe, "Enable SPIFFE integration")
+	option.BindEnv(option.EnableSpiffe)
+
+	flags.String(option.SpirePrivilegedAPISocketPath, defaults.SpirePrivilegedAPISocketPath, "Socket path to contact the Spire agent")
+	option.BindEnv(option.Config.SpirePrivilegedAPISocketPath)
 
 	viper.BindPFlags(flags)
 }

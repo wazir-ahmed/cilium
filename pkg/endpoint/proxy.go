@@ -18,9 +18,11 @@ import (
 	"reflect"
 
 	"github.com/cilium/cilium/pkg/completion"
+	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/policy"
 	"github.com/cilium/cilium/pkg/proxy/logger"
 	"github.com/cilium/cilium/pkg/revert"
+	"github.com/cilium/cilium/pkg/spiffe"
 )
 
 // EndpointProxy defines any L7 proxy with which an Endpoint must interact.
@@ -30,6 +32,7 @@ type EndpointProxy interface {
 	UpdateNetworkPolicy(ep logger.EndpointUpdater, policy *policy.L4Policy, ingressPolicyEnforced, egressPolicyEnforced bool, wg *completion.WaitGroup) (error, func() error)
 	UseCurrentNetworkPolicy(ep logger.EndpointUpdater, policy *policy.L4Policy, wg *completion.WaitGroup)
 	RemoveNetworkPolicy(ep logger.EndpointInfoSource)
+	UpdateSVIDs(id identity.NumericIdentity, svids []*spiffe.SpiffeSVID)
 }
 
 // SetProxy sets the proxy for this endpoint.
@@ -74,3 +77,5 @@ func (f *FakeEndpointProxy) UseCurrentNetworkPolicy(ep logger.EndpointUpdater, p
 
 // RemoveNetworkPolicy does nothing.
 func (f *FakeEndpointProxy) RemoveNetworkPolicy(ep logger.EndpointInfoSource) {}
+
+func (f *FakeEndpointProxy) UpdateSVIDs(id identity.NumericIdentity, svids []*spiffe.SpiffeSVID) {}
