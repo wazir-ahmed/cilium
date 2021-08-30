@@ -1,0 +1,13 @@
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: "allow-80-only-egress-empire"
+spec:
+  endpointSelector:
+    matchLabels:
+      org: empire
+  egress:
+    - toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP

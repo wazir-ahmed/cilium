@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"os"
 
+	clientPkg "github.com/cilium/cilium/pkg/client"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/monitor/api"
+	"github.com/spf13/viper"
 )
 
 const (
@@ -65,7 +67,10 @@ type PolicyVerdictNotify struct {
 	DstPort     uint16
 	Proto       uint8
 	Flags       uint8
-	Pad1        uint32
+	Pad1        uint16
+	RuleId      uint16
+	Packtes     uint64
+	Bytes       uint64
 	// data
 }
 
@@ -92,17 +97,46 @@ func (n *PolicyVerdictNotify) IsTrafficAudited() bool {
 }
 
 // GetPolicyActionString returns the action string corresponding to the action
-func GetPolicyActionString(verdict int32, audit bool) string {
+func GetPolicyActionString(audit bool) string {
 	if audit {
-		return "audit"
+		return "auditMode:true"
+	} else {
+		return "auditMode:false"
 	}
+}
 
+func GetVerdict(verdict int32) string {
 	if verdict < 0 {
-		return "deny"
+		return "DENY"
 	} else if verdict > 0 {
-		return "redirect"
+		return "REDIRECT"
 	}
-	return "allow"
+	return "ALLOW"
+}
+
+var (
+	policyIDNames = make(map[uint16]string)
+	client        *clientPkg.Client
+)
+
+func GetPolicyName(RuleID uint16) (string, error) {
+	if RuleID != 0 {
+		if policyIDNames[uint16(RuleID)] == "" {
+			if cl, err := clientPkg.NewClient(viper.GetString("host")); err != nil {
+				fmt.Println("Error while creating client: ", err)
+			} else {
+				client = cl
+			}
+			if result, err := client.PolicyIDGet(uint16(RuleID)); err != nil {
+				return "", err
+			} else if result != nil && len(result.Name) != 0 {
+				policyIDNames[uint16(RuleID)] = result.Name
+			}
+		}
+	} else {
+		return "implicit-default-deny", nil
+	}
+	return policyIDNames[uint16(RuleID)], nil
 }
 
 // DumpInfo prints a summary of the policy notify messages.
@@ -112,14 +146,21 @@ func (n *PolicyVerdictNotify) DumpInfo(data []byte, numeric DisplayFormat) {
 	if n.IsTrafficIngress() {
 		dir = "ingress"
 	}
-	fmt.Fprintf(buf, "Policy verdict log: flow %#x local EP ID %d", n.Hash, n.Source)
+	fmt.Fprintf(buf, "Policy verdict log: flow %#x", n.Hash)
+	if policyName, err := GetPolicyName(n.RuleId); err == nil {
+		fmt.Fprintf(buf, ", PolicyName %s, local EP ID %d", policyName, n.Source)
+	} else if n.RuleId == 0 {
+		fmt.Fprintf(buf, ", PolicyName implicit-default-deny, local EP ID %d", n.Source)
+	} else {
+		fmt.Fprintf(buf, ", local EP ID %d", n.Source)
+	}
 	if numeric {
 		fmt.Fprintf(buf, ", remote ID %d", n.RemoteLabel)
 	} else {
 		fmt.Fprintf(buf, ", remote ID %s", n.RemoteLabel)
 	}
-	fmt.Fprintf(buf, ", proto %d, %s, action %s, match %s, %s\n", n.Proto, dir,
-		GetPolicyActionString(n.Verdict, n.IsTrafficAudited()),
+	fmt.Fprintf(buf, ", proto %d, %s, action %s %s, match %s, %s\n", n.Proto, dir,
+		GetVerdict(n.Verdict), GetPolicyActionString(n.IsTrafficAudited()),
 		n.GetPolicyMatchType(),
 		GetConnectionSummary(data[PolicyVerdictNotifyLen:]))
 	buf.Flush()

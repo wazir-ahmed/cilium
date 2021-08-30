@@ -1,0 +1,15 @@
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: "a-deny-80-only-egress-tiefighter"
+spec:
+  auditMode: true
+  endpointSelector:
+    matchLabels:
+      org: empire
+      class: tiefighter
+  egressDeny:
+    - toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP

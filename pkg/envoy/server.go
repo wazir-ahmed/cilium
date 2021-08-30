@@ -873,7 +873,7 @@ func getHTTPRule(certManager policy.CertificateManager, h *api.PortRuleHTTP, ns 
 		// SortHeaderMatches(headerMatches)
 	}
 
-	return &cilium.HttpNetworkPolicyRule{Headers: headers, HeaderMatches: headerMatches}, len(headerMatches) == 0
+	return &cilium.HttpNetworkPolicyRule{Headers: headers, HeaderMatches: headerMatches, AuditMode: h.AuditMode, RuleId: uint32(h.RuleID)}, len(headerMatches) == 0
 }
 
 func createBootstrap(filePath string, nodeId, cluster string, xdsSock, egressClusterName, ingressClusterName string, adminPath string) {

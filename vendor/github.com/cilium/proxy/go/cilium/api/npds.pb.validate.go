@@ -652,6 +652,10 @@ func (m *HttpNetworkPolicyRule) Validate() error {
 
 	}
 
+	// no validation rules for RuleId
+
+	// no validation rules for AuditMode
+
 	return nil
 }
 

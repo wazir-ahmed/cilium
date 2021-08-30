@@ -39,6 +39,17 @@ func (l *LogRecordNotify) direction() string {
 	}
 }
 
+var audit string
+
+func (l *LogRecordNotify) GetAuditVerdict(isAudited bool) string {
+	if l.HTTP != nil {
+		if isAudited {
+			return "auditMode:true"
+		}
+	}
+	return "auditMode:false"
+}
+
 func (l *LogRecordNotify) l7Proto() string {
 	if l.HTTP != nil {
 		return "http"
@@ -47,7 +58,6 @@ func (l *LogRecordNotify) l7Proto() string {
 	if l.Kafka != nil {
 		return "kafka"
 	}
-
 	if l.DNS != nil {
 		return "dns"
 	}
@@ -61,20 +71,22 @@ func (l *LogRecordNotify) l7Proto() string {
 
 // DumpInfo dumps an access log notification
 func (l *LogRecordNotify) DumpInfo() {
+	policyName, _ := GetPolicyName(l.HTTP.RuleID)
+
 	switch l.Type {
 	case accesslog.TypeRequest:
-		fmt.Printf("%s %s %s from %d (%s) to %d (%s), identity %d->%d, verdict %s",
+		fmt.Printf("%s %s %s from %d (%s) to %d (%s), identity %d->%d, verdict %s %s PolicyName %s",
 			l.direction(), l.Type, l.l7Proto(), l.SourceEndpoint.ID, l.SourceEndpoint.Labels,
 			l.DestinationEndpoint.ID, l.DestinationEndpoint.Labels,
 			l.SourceEndpoint.Identity, l.DestinationEndpoint.Identity,
-			l.Verdict)
+			l.Verdict, l.GetAuditVerdict(l.HTTP.AuditMode), policyName)
 
 	case accesslog.TypeResponse:
-		fmt.Printf("%s %s %s to %d (%s) from %d (%s), identity %d->%d, verdict %s",
+		fmt.Printf("%s %s %s to %d (%s) from %d (%s), identity %d->%d, verdict %s %s PolicyName %s",
 			l.direction(), l.Type, l.l7Proto(), l.SourceEndpoint.ID, l.SourceEndpoint.Labels,
 			l.DestinationEndpoint.ID, l.DestinationEndpoint.Labels,
 			l.SourceEndpoint.Identity, l.DestinationEndpoint.Identity,
-			l.Verdict)
+			l.Verdict, l.GetAuditVerdict(l.HTTP.AuditMode), policyName)
 	}
 
 	if http := l.HTTP; http != nil {
