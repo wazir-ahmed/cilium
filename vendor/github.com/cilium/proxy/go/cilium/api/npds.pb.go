@@ -770,6 +770,10 @@ type HttpNetworkPolicyRule struct {
 	//
 	// Optional.
 	HeaderMatches []*HeaderMatch `protobuf:"bytes,2,rep,name=header_matches,json=headerMatches,proto3" json:"header_matches,omitempty"`
+	// Optional rule id
+	RuleId uint32 `protobuf:"varint,3,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	// Optional
+	AuditMode bool `protobuf:"varint,4,opt,name=audit_mode,json=auditMode,proto3" json:"audit_mode,omitempty"`
 }
 
 func (x *HttpNetworkPolicyRule) Reset() {
@@ -816,6 +820,20 @@ func (x *HttpNetworkPolicyRule) GetHeaderMatches() []*HeaderMatch {
 		return x.HeaderMatches
 	}
 	return nil
+}
+
+func (x *HttpNetworkPolicyRule) GetRuleId() uint32 {
+	if x != nil {
+		return x.RuleId
+	}
+	return 0
+}
+
+func (x *HttpNetworkPolicyRule) GetAuditMode() bool {
+	if x != nil {
+		return x.AuditMode
+	}
+	return false
 }
 
 // A set of network policy rules that match Kafka requests.
