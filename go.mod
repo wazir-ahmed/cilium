@@ -115,7 +115,7 @@ require (
 )
 
 replace (
-	github.com/cilium/proxy => github.com/kinvolk/cilium-proxy v0.0.0-20210708141120-2298198b346b
+	github.com/cilium/proxy => github.com/accuknox/cilium-proxy-private v0.0.0-20210906140837-ac9527ed2203
 
 	github.com/miekg/dns => github.com/cilium/dns v1.1.4-0.20190417235132-8e25ec9a0ff3
 	github.com/optiopay/kafka => github.com/cilium/kafka v0.0.0-20180809090225-01ce283b732b
