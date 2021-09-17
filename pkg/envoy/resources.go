@@ -36,7 +36,37 @@ const (
 
 	// NetworkPolicyHostsTypeURL is the type URL of NetworkPolicyHosts resources.
 	NetworkPolicyHostsTypeURL = "type.googleapis.com/cilium.NetworkPolicyHosts"
+
+	SVIDsTypeURL = "type.googleapis.com/cilium.SVIDs"
+
+	BundlesTypeURL = "type.googleapis.com/cilium.Bundles"
 )
+
+// sVIDsCache is a cache of resources in the SVIDs Discovery Service
+type sVIDsCache struct {
+	*xds.Cache
+}
+
+func newSVIDsCache() sVIDsCache {
+	return sVIDsCache{Cache: xds.NewCache()}
+}
+
+func (cache *sVIDsCache) HandleResourceVersionAck(ackVersion uint64, nackVersion uint64, nodeIP string, resourceNames []string, typeURL string, detail string) {
+	// Do nothing!
+}
+
+// bundlesCache is a cache of resources in the Bundles Discovery Service
+type bundlesCache struct {
+	*xds.Cache
+}
+
+func newBundlesCache() bundlesCache {
+	return bundlesCache{Cache: xds.NewCache()}
+}
+
+func (cache *bundlesCache) HandleResourceVersionAck(ackVersion uint64, nackVersion uint64, nodeIP string, resourceNames []string, typeURL string, detail string) {
+	// Do nothing!
+}
 
 // NPHDSCache is a cache of resources in the Network Policy Hosts Discovery
 // Service.
@@ -53,6 +83,10 @@ var (
 	// NetworkPolicyHosts. Resources in this cache must have the
 	// NetworkPolicyHostsTypeURL type URL.
 	NetworkPolicyHostsCache = newNPHDSCache()
+
+	SVIDsCache = newSVIDsCache()
+
+	BundlesCache = newBundlesCache()
 
 	observerOnce = sync.Once{}
 )

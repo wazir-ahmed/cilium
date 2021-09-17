@@ -405,6 +405,8 @@ func (e *Endpoint) toSerializedEndpoint() *serializableEndpoint {
 		K8sPodName:            e.K8sPodName,
 		K8sNamespace:          e.K8sNamespace,
 		DatapathConfiguration: e.DatapathConfiguration,
+		SpiffeIDs:             e.spiffeIDs,
+		SpiffeExpiration:      e.spiffeExpiration,
 	}
 }
 
@@ -496,6 +498,9 @@ type serializableEndpoint struct {
 	// plugin which performed the plumbing will enable certain datapath
 	// features according to the mode selected.
 	DatapathConfiguration models.EndpointDatapathConfiguration
+
+	SpiffeIDs        labels.Labels
+	SpiffeExpiration map[string]int64
 }
 
 // UnmarshalJSON expects that the contents of `raw` are a serializableEndpoint,
@@ -504,9 +509,11 @@ func (ep *Endpoint) UnmarshalJSON(raw []byte) error {
 	// We may have to populate structures in the Endpoint manually to do the
 	// translation from serializableEndpoint --> Endpoint.
 	restoredEp := &serializableEndpoint{
-		OpLabels:   labels.NewOpLabels(),
-		DNSHistory: fqdn.NewDNSCacheWithLimit(option.Config.ToFQDNsMinTTL, option.Config.ToFQDNsMaxIPsPerHost),
-		DNSZombies: fqdn.NewDNSZombieMappings(option.Config.ToFQDNsMaxDeferredConnectionDeletes),
+		OpLabels:         labels.NewOpLabels(),
+		DNSHistory:       fqdn.NewDNSCacheWithLimit(option.Config.ToFQDNsMinTTL, option.Config.ToFQDNsMaxIPsPerHost),
+		DNSZombies:       fqdn.NewDNSZombieMappings(option.Config.ToFQDNsMaxDeferredConnectionDeletes),
+		SpiffeIDs:        labels.Labels{},
+		SpiffeExpiration: make(map[string]int64),
 	}
 	if err := json.Unmarshal(raw, restoredEp); err != nil {
 		return fmt.Errorf("error unmarshaling serializableEndpoint from base64 representation: %s", err)
@@ -544,4 +551,6 @@ func (ep *Endpoint) fromSerializedEndpoint(r *serializableEndpoint) {
 	ep.K8sNamespace = r.K8sNamespace
 	ep.DatapathConfiguration = r.DatapathConfiguration
 	ep.Options = r.Options
+	ep.spiffeIDs = r.SpiffeIDs
+	ep.spiffeExpiration = r.SpiffeExpiration
 }

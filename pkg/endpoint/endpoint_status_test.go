@@ -69,7 +69,7 @@ func (s *EndpointSuite) newEndpoint(c *check.C, spec endpointGeneratorSpec) *End
 			"k8s:name=probe",
 		},
 		State: models.EndpointState("waiting-for-identity"),
-	})
+	}, nil)
 	c.Assert(err, check.IsNil)
 
 	e.SecurityIdentity = &identity.Identity{

@@ -83,6 +83,16 @@ type Secret struct {
 	Name string `json:"name"`
 }
 
+// Spiffe defines the parameters to use when the connection is originated /
+// terminated using TLS certificates from spiffe.
+type Spiffe struct {
+	// PeerIDs is the list of allowed Spiffe IDs. All peers presenting a
+	// certificate valid for any of the peers listed here is allowed.
+	//
+	// +kubebuilder:validation:Optional
+	PeerIDs []string `json:"peerIDs"`
+}
+
 // TLSContext provides TLS configuration via reference to either k8s secrets
 // or via filepath. If both are set, directory is given priority over
 // k8sSecrets.
@@ -95,7 +105,7 @@ type TLSContext struct {
 	//  - 'tls.key' - Which represents the private key matching the public key
 	//                certificate.
 	//
-	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Optional
 	Secret *Secret `json:"secret"`
 
 	// TrustedCA is the file name or k8s secret item name for the trusted CA.
@@ -118,6 +128,19 @@ type TLSContext struct {
 	//
 	// +kubebuilder:validation:Optional
 	PrivateKey string `json:"privateKey,omitempty"`
+
+	// Spiffe defines the spiffe parameters to use for this connection. When
+	// specified, the connection will be originated / terminated using TLS
+	// certificates from spiffe.
+	//
+	// +kubebuilder:validation:Optional
+	Spiffe *Spiffe `json:"spiffe"`
+
+	// DstPort is the port that will be used for the ongoing connection from the
+	// proxy instance. If ommited the original dst port is preserved.
+	//
+	// +kubebuilder:validation:Optional
+	DstPort uint16 `json:"dstPort"`
 }
 
 // PortRule is a list of ports/protocol combinations with optional Layer 7

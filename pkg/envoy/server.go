@@ -16,6 +16,8 @@ package envoy
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
@@ -27,6 +29,7 @@ import (
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/completion"
 	"github.com/cilium/cilium/pkg/envoy/xds"
+	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
@@ -34,6 +37,7 @@ import (
 	"github.com/cilium/cilium/pkg/policy/api"
 	"github.com/cilium/cilium/pkg/policy/api/kafka"
 	"github.com/cilium/cilium/pkg/proxy/logger"
+	"github.com/cilium/cilium/pkg/spiffe"
 
 	cilium "github.com/cilium/proxy/go/cilium/api"
 	envoy_config_bootstrap "github.com/cilium/proxy/go/envoy/config/bootstrap/v3"
@@ -179,7 +183,17 @@ func StartXDSServer(stateDir string) *XDSServer {
 		AckObserver: &NetworkPolicyHostsCache,
 	}
 
-	stopServer := startXDSGRPCServer(socketListener, ldsConfig, npdsConfig, nphdsConfig, 5*time.Second)
+	svidsConfig := &xds.ResourceTypeConfiguration{
+		Source:      SVIDsCache,
+		AckObserver: &SVIDsCache,
+	}
+
+	bundlesConfig := &xds.ResourceTypeConfiguration{
+		Source:      BundlesCache,
+		AckObserver: &BundlesCache,
+	}
+
+	stopServer := startXDSGRPCServer(socketListener, ldsConfig, npdsConfig, nphdsConfig, svidsConfig, bundlesConfig, 5*time.Second)
 
 	return &XDSServer{
 		socketPath:             xdsPath,
@@ -503,7 +517,7 @@ func (s *XDSServer) addListener(name string, port uint16, listenerConf func() *e
 	s.mutex.Unlock()
 }
 
-func (s *XDSServer) getListenerConf(name string, kind policy.L7ParserType, port uint16, isIngress bool, mayUseOriginalSourceAddr bool) *envoy_config_listener.Listener {
+func (s *XDSServer) getListenerConf(name string, kind policy.L7ParserType, port uint16, isIngress bool, mayUseOriginalSourceAddr bool, hasOriginatingTLS, hasTerminatingTLS bool) *envoy_config_listener.Listener {
 	clusterName := egressClusterName
 	socketMark := int64(0xB00)
 	if isIngress {
@@ -551,14 +565,33 @@ func (s *XDSServer) getListenerConf(name string, kind policy.L7ParserType, port 
 			Name: "envoy.filters.listener.tls_inspector",
 		}}, listenerConf.ListenerFilters...)
 
-		listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(clusterName, false))
-
 		// Add a TLS variant
 		tlsClusterName := egressTLSClusterName
 		if isIngress {
 			tlsClusterName = ingressTLSClusterName
 		}
-		listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(tlsClusterName, true))
+
+		if hasOriginatingTLS == hasTerminatingTLS {
+			// HTTP -> HTTP
+			listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(clusterName, false))
+
+			// HTTPS -> HTTPS
+			listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(tlsClusterName, true))
+		} else {
+			if hasOriginatingTLS {
+				// HTTP -> HTTPS
+				listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(tlsClusterName, false))
+
+				// HTTPS -> HTTPS
+				listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(tlsClusterName, true))
+			} else {
+				// HTTPS -> HTTP
+				listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(clusterName, true))
+
+				// HTTP -> HTTP
+				listenerConf.FilterChains = append(listenerConf.FilterChains, s.getHttpFilterChainProto(clusterName, false))
+			}
+		}
 	} else {
 		// Default TCP chain, takes care of all parsers in proxylib
 		listenerConf.FilterChains = append(listenerConf.FilterChains, s.getTcpFilterChainProto(clusterName, "", nil))
@@ -580,11 +613,11 @@ func (s *XDSServer) getListenerConf(name string, kind policy.L7ParserType, port 
 }
 
 // AddListener adds a listener to a running Envoy proxy.
-func (s *XDSServer) AddListener(name string, kind policy.L7ParserType, port uint16, isIngress bool, mayUseOriginalSourceAddr bool, wg *completion.WaitGroup) {
+func (s *XDSServer) AddListener(name string, kind policy.L7ParserType, port uint16, isIngress bool, mayUseOriginalSourceAddr bool, wg *completion.WaitGroup, hasOriginatingTLS, hasTerminatingTLS bool) {
 	log.Debugf("Envoy: %s AddListener %s (mayUseOriginalSourceAddr: %v)", kind, name, mayUseOriginalSourceAddr)
 
 	s.addListener(name, port, func() *envoy_config_listener.Listener {
-		return s.getListenerConf(name, kind, port, isIngress, mayUseOriginalSourceAddr)
+		return s.getListenerConf(name, kind, port, isIngress, mayUseOriginalSourceAddr, hasOriginatingTLS, hasTerminatingTLS)
 	}, wg, nil)
 }
 
@@ -1037,10 +1070,20 @@ func createBootstrap(filePath string, nodeId, cluster string, xdsSock, egressClu
 }
 
 func getCiliumTLSContext(tls *policy.TLSContext) *cilium.TLSContext {
+	if tls.Spiffe != nil {
+		return &cilium.TLSContext{
+			Spiffe: &cilium.Spiffe{
+				PeerIds: tls.Spiffe.PeerIDs,
+			},
+			Dstport: uint32(tls.DstPort),
+		}
+	}
+
 	return &cilium.TLSContext{
 		TrustedCa:        tls.TrustedCA,
 		CertificateChain: tls.CertificateChain,
 		PrivateKey:       tls.PrivateKey,
+		Dstport:          uint32(tls.DstPort),
 	}
 }
 
@@ -1511,4 +1554,115 @@ func (s *XDSServer) getLocalEndpoint(networkPolicyName string) logger.EndpointUp
 	defer s.mutex.RUnlock()
 
 	return s.networkPolicyEndpoints[networkPolicyName]
+}
+
+// TODO(Mauricio): We need a type for X509SVID
+func (s *XDSServer) UpdateSVIDs(id identity.NumericIdentity, svids []*spiffe.SpiffeSVID) {
+	if svids == nil || len(svids) == 0 {
+		SVIDsCache.Delete(SVIDsTypeURL, id.StringID())
+		return
+	}
+
+	proxySvids, err := convertSVIDs(svids)
+	if err != nil {
+		log.WithError(err).Debug("fail to convert SVIDs")
+		return
+	}
+
+	envoySvids := cilium.SVIDs{
+		Identity: uint64(id),
+		Svids:    proxySvids,
+	}
+
+	SVIDsCache.Upsert(SVIDsTypeURL, id.StringID(), &envoySvids)
+}
+
+// TODO(Mauricio): Stupid converstion function because definition comes from
+// different proto definitions.
+func convertSVIDs(svids []*spiffe.SpiffeSVID) ([]*cilium.X509SVID, error) {
+	newSvids := []*cilium.X509SVID{}
+
+	// TODO(Mauricio): reflection, deep copy?
+	for _, svid := range svids {
+		cert, err := convertCertificates(svid.CertChain)
+		if err != nil {
+			return nil, err
+		}
+
+		key, err := convertKey(svid.Key)
+		if err != nil {
+			return nil, err
+		}
+
+		newSvid := cilium.X509SVID{
+			SpiffeId: svid.SpiffeID,
+			Cert:     cert,
+			Key:      key,
+		}
+
+		newSvids = append(newSvids, &newSvid)
+	}
+
+	return newSvids, nil
+}
+
+// converts from DER to PEM
+func convertCertificates(dem []byte) ([]byte, error) {
+	certs, err := x509.ParseCertificates(dem)
+	if err != nil {
+		return nil, err
+	}
+
+	pemData := []byte{}
+	for _, cert := range certs {
+		b := &pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: cert.Raw,
+		}
+		pemData = append(pemData, pem.EncodeToMemory(b)...)
+	}
+
+	return pemData, nil
+}
+
+func convertKey(dem []byte) ([]byte, error) {
+	privateKey, err := x509.ParsePKCS8PrivateKey(dem)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse private key: %v", err)
+	}
+	//signer, ok := privateKey.(crypto.Signer)
+	//if !ok {
+	//	return nil, fmt.Errorf("private key is type %T, not crypto.Signer", privateKey)
+	//}
+
+	data, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return nil, err
+	}
+	b := &pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: data,
+	}
+
+	return pem.EncodeToMemory(b), nil
+}
+
+func (s *XDSServer) UpdateBundle(trustDomainName string, bundle []byte) {
+	if bundle == nil || len(bundle) == 0 {
+		BundlesCache.Delete(BundlesTypeURL, trustDomainName)
+		return
+	}
+
+	cert, err := convertCertificates(bundle)
+	if err != nil {
+		log.WithError(err).Debug("fail to convert bundle")
+		return
+	}
+
+	envoyBundle := cilium.Bundles{
+		TrustDomainName: trustDomainName,
+		Bundle:          cert,
+	}
+
+	BundlesCache.Upsert(BundlesTypeURL, trustDomainName, &envoyBundle)
 }
