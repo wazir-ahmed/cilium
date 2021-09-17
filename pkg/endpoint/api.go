@@ -33,6 +33,7 @@ import (
 	"github.com/cilium/cilium/pkg/mac"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
+	"github.com/cilium/cilium/pkg/spiffe"
 	"github.com/cilium/cilium/pkg/u8proto"
 )
 
@@ -60,12 +61,12 @@ func (e *Endpoint) GetLabelsModel() (*models.LabelConfiguration, error) {
 }
 
 // NewEndpointFromChangeModel creates a new endpoint from a request
-func NewEndpointFromChangeModel(ctx context.Context, owner regeneration.Owner, proxy EndpointProxy, allocator cache.IdentityAllocator, base *models.EndpointChangeRequest) (*Endpoint, error) {
+func NewEndpointFromChangeModel(ctx context.Context, owner regeneration.Owner, proxy EndpointProxy, allocator cache.IdentityAllocator, base *models.EndpointChangeRequest, spiffeWatcher *spiffe.Watcher) (*Endpoint, error) {
 	if base == nil {
 		return nil, nil
 	}
 
-	ep := createEndpoint(owner, proxy, allocator, uint16(base.ID), base.InterfaceName)
+	ep := createEndpoint(owner, proxy, allocator, uint16(base.ID), base.InterfaceName, spiffeWatcher)
 	ep.ifIndex = int(base.InterfaceIndex)
 	ep.containerName = base.ContainerName
 	ep.containerID = base.ContainerID

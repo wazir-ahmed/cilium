@@ -65,6 +65,7 @@ import (
 	"github.com/cilium/cilium/pkg/policy"
 	"github.com/cilium/cilium/pkg/policy/trafficdirection"
 	"github.com/cilium/cilium/pkg/proxy/accesslog"
+	"github.com/cilium/cilium/pkg/spiffe"
 	"github.com/cilium/cilium/pkg/trigger"
 
 	"github.com/sirupsen/logrus"
@@ -350,6 +351,22 @@ type Endpoint struct {
 	isHost bool
 
 	noTrackPort uint16
+
+	// Set of labels that correspond to SPIFFE IDs
+	spiffeIDs labels.Labels
+	// Expiration time for spiffe-based labels. Map key is same used in above
+	// field
+	spiffeExpiration map[string]int64
+
+	spiffeWatcher *spiffe.Watcher
+
+	svids []*spiffe.SpiffeSVID
+}
+
+func (e *Endpoint) SetSpiffeWatcher(spiffeWatcher *spiffe.Watcher) {
+	e.unconditionalLock()
+	defer e.unlock()
+	e.spiffeWatcher = spiffeWatcher
 }
 
 // EndpointSyncControllerName returns the controller name to synchronize
@@ -442,7 +459,7 @@ func (e *Endpoint) waitForProxyCompletions(proxyWaitGroup *completion.WaitGroup)
 
 // NewEndpointWithState creates a new endpoint useful for testing purposes
 func NewEndpointWithState(owner regeneration.Owner, proxy EndpointProxy, allocator cache.IdentityAllocator, ID uint16, state State) *Endpoint {
-	ep := createEndpoint(owner, proxy, allocator, ID, "")
+	ep := createEndpoint(owner, proxy, allocator, ID, "", nil)
 	ep.state = state
 	ep.eventQueue = eventqueue.NewEventQueueBuffered(fmt.Sprintf("endpoint-%d", ID), option.Config.EndpointQueueSize)
 
@@ -453,26 +470,28 @@ func NewEndpointWithState(owner regeneration.Owner, proxy EndpointProxy, allocat
 	return ep
 }
 
-func createEndpoint(owner regeneration.Owner, proxy EndpointProxy, allocator cache.IdentityAllocator, ID uint16, ifName string) *Endpoint {
+func createEndpoint(owner regeneration.Owner, proxy EndpointProxy, allocator cache.IdentityAllocator, ID uint16, ifName string, spiffeWatcher *spiffe.Watcher) *Endpoint {
 	ep := &Endpoint{
-		owner:           owner,
-		ID:              ID,
-		createdAt:       time.Now(),
-		proxy:           proxy,
-		ifName:          ifName,
-		OpLabels:        labels.NewOpLabels(),
-		DNSRules:        nil,
-		DNSHistory:      fqdn.NewDNSCacheWithLimit(option.Config.ToFQDNsMinTTL, option.Config.ToFQDNsMaxIPsPerHost),
-		DNSZombies:      fqdn.NewDNSZombieMappings(option.Config.ToFQDNsMaxDeferredConnectionDeletes),
-		state:           "",
-		status:          NewEndpointStatus(),
-		hasBPFProgram:   make(chan struct{}, 0),
-		desiredPolicy:   policy.NewEndpointPolicy(owner.GetPolicyRepository()),
-		controllers:     controller.NewManager(),
-		regenFailedChan: make(chan struct{}, 1),
-		allocator:       allocator,
-		logLimiter:      logging.NewLimiter(10*time.Second, 3), // 1 log / 10 secs, burst of 3
-		noTrackPort:     0,
+		owner:            owner,
+		ID:               ID,
+		createdAt:        time.Now(),
+		proxy:            proxy,
+		ifName:           ifName,
+		OpLabels:         labels.NewOpLabels(),
+		DNSRules:         nil,
+		DNSHistory:       fqdn.NewDNSCacheWithLimit(option.Config.ToFQDNsMinTTL, option.Config.ToFQDNsMaxIPsPerHost),
+		DNSZombies:       fqdn.NewDNSZombieMappings(option.Config.ToFQDNsMaxDeferredConnectionDeletes),
+		state:            "",
+		status:           NewEndpointStatus(),
+		hasBPFProgram:    make(chan struct{}, 0),
+		desiredPolicy:    policy.NewEndpointPolicy(owner.GetPolicyRepository()),
+		controllers:      controller.NewManager(),
+		regenFailedChan:  make(chan struct{}, 1),
+		allocator:        allocator,
+		logLimiter:       logging.NewLimiter(10*time.Second, 3), // 1 log / 10 secs, burst of 3
+		noTrackPort:      0,
+		spiffeWatcher:    spiffeWatcher,
+		spiffeExpiration: make(map[string]int64),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -495,7 +514,7 @@ func CreateHostEndpoint(owner regeneration.Owner, proxy EndpointProxy, allocator
 		return nil, err
 	}
 
-	ep := createEndpoint(owner, proxy, allocator, 0, ifName)
+	ep := createEndpoint(owner, proxy, allocator, 0, ifName, nil)
 	ep.isHost = true
 	ep.mac = mac
 	ep.nodeMAC = mac
@@ -1197,6 +1216,122 @@ func (e *Endpoint) GetK8sNamespace() string {
 	return ns
 }
 
+func (e *Endpoint) WatchSpiffeIDs() error {
+	if !option.Config.EnableSpiffe {
+		return nil
+	}
+
+	if e.spiffeWatcher == nil {
+		return fmt.Errorf("no spiffe watcher is set")
+	}
+
+	// mutex to guarantee that the updateFunc, called when there is an update of
+	// the spiffe labels,  and the function called to check if the labels are
+	// expired don't interfere each other
+	// TODO: rework this to avoid having a new mutex and use e.mutex instead
+	spiffeMutex := lock.Mutex{}
+
+	updateFunc := func(svids []*spiffe.SpiffeSVID) {
+		// Just check that the endpoint is still valid
+		if err := e.lockAlive(); err != nil {
+			return
+		}
+		e.unlock()
+
+		spiffeMutex.Lock()
+		defer spiffeMutex.Unlock()
+
+		newSpiffeIds := labels.Labels{}
+		for _, svid := range svids {
+			//e.LogStatusOK(Other, fmt.Sprintf("V2 -> Processing SPIFFE-ID %q", svid.SpiffeID))
+			e.getLogger().Debugf("Processing Spiffe ID %q", svid.SpiffeID)
+			spiffeLabel := labels.NewLabel(svid.SpiffeID, "", "")
+			newSpiffeIds[spiffeLabel.Key] = spiffeLabel
+			e.spiffeExpiration[spiffeLabel.Key] = svid.ExpiresAt
+		}
+
+		// assign here to be sure they're considered when calling sendSVIDs()
+		e.svids = svids
+
+		if !newSpiffeIds.Equals(e.spiffeIDs) {
+			// Labels changed, calculate new ID
+			if err := e.ModifyIdentityLabels(newSpiffeIds, e.spiffeIDs); err != nil {
+				// TODO(Mauricio): retry, fail?
+				e.LogStatus(Other, Warning, fmt.Sprintf("Failed to update identity labels (1) %s", err.Error()))
+			}
+		} else {
+			// Labels are the same, it's just a cert rotation.
+			e.LogStatusOK(Other, fmt.Sprintf("Handling cert rotation"))
+			e.sendSVIDs()
+		}
+
+		e.spiffeIDs = newSpiffeIds
+	}
+
+	err := e.spiffeWatcher.Watch(e.pod, updateFunc)
+	if err != nil {
+		e.LogStatus(Other, Warning, fmt.Sprintf("failed to watch spiffe IDs: %s", err.Error()))
+		return err
+	}
+
+	controllerName := fmt.Sprintf("expire-spiffe-labels-%d", e.ID)
+	e.controllers.UpdateController(controllerName,
+		controller.ControllerParams{
+			DoFunc: func(ctx context.Context) error {
+				// Just check that the endpoint is still valid
+				if err := e.lockAlive(); err != nil {
+					return err
+				}
+
+				// TODO(Mauricio): avoid messing up!
+				if e.getState() != StateReady {
+					e.unlock()
+					return nil
+				}
+
+				e.unlock()
+
+				spiffeMutex.Lock()
+				defer spiffeMutex.Unlock()
+
+				now := time.Now().Unix()
+				toDelete := labels.Labels{}
+
+				log.Debugf("spiffe: checking if spiffe-labels are valid")
+
+				for key, value := range e.spiffeIDs {
+					expiresAt, ok := e.spiffeExpiration[key]
+					log.Debugf("spiffe: checking if label %s is expired (expires at %d)", key, expiresAt)
+					if !ok || now > expiresAt {
+						toDelete[key] = value
+						delete(e.spiffeIDs, key)
+						delete(e.spiffeExpiration, key)
+						e.LogStatusOK(Other, fmt.Sprintf("removing expired %s spiffe label", key))
+					}
+				}
+
+				if err := e.ModifyIdentityLabels(labels.Labels{}, toDelete); err != nil {
+					// TODO(Mauricio): retry, fail?
+					e.LogStatus(Other, Warning, fmt.Sprintf("Failed to update identity labels (2) %s", err.Error()))
+				}
+
+				return nil
+			},
+			Context:     e.aliveCtx,
+			RunInterval: 1 * time.Minute,
+		},
+	)
+
+	return nil
+}
+
+// Push current SVIDs to Envoy
+func (e *Endpoint) sendSVIDs() {
+	// TODO: how to lock?
+	// - this is called from SetIdentity that already has a lock...
+	e.proxy.UpdateSVIDs(e.getIdentity(), e.svids)
+}
+
 // SetPod sets the pod related to this endpoint.
 func (e *Endpoint) SetPod(pod *slim_corev1.Pod) {
 	e.unconditionalLock()
@@ -1620,6 +1755,12 @@ func (e *Endpoint) RunMetadataResolver(resolveMetadata MetadataResolverCB) {
 					return err
 				}
 				e.SetPod(pod)
+				if !identity.IdentityAllocationIsLocal(identityLabels) {
+					err = e.WatchSpiffeIDs()
+					if err != nil {
+						return err
+					}
+				}
 				e.SetK8sMetadata(cp)
 				e.UpdateNoTrackRules(func(_, _ string) (noTrackPort string, err error) {
 					_, _, _, _, annotations, err := resolveMetadata(ns, podName)
@@ -2187,6 +2328,12 @@ func (e *Endpoint) Delete(conf DeleteConfig) []error {
 		return []error{}
 	}
 	e.setState(StateDisconnecting, "Deleting endpoint")
+
+	if option.Config.EnableSpiffe {
+		if err := e.spiffeWatcher.Unwatch(e.pod); err != nil {
+			errs = append(errs, err)
+		}
+	}
 
 	// If dry mode is enabled, no changes to BPF maps are performed
 	if !option.Config.DryMode {

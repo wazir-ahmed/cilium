@@ -34,7 +34,7 @@ import (
 	"github.com/cilium/cilium/pkg/policy/api"
 	"github.com/cilium/cilium/pkg/policy/trafficdirection"
 	"github.com/cilium/cilium/pkg/u8proto"
-	"github.com/cilium/proxy/go/cilium/api"
+	cilium "github.com/cilium/proxy/go/cilium/api"
 
 	"github.com/sirupsen/logrus"
 )
@@ -104,11 +104,17 @@ func __canSkip(currentRule *PerSelectorPolicy, wildcardRule *PerSelectorPolicy) 
 	return ok
 }
 
+type Spiffe struct {
+	PeerIDs []string `json:"peerIDs"`
+}
+
 // TLS context holds the secret values resolved from an 'api.TLSContext'
 type TLSContext struct {
 	TrustedCA        string `json:"trustedCA,omitempty"`
 	CertificateChain string `json:"certificateChain,omitempty"`
 	PrivateKey       string `json:"privateKey,omitempty"`
+	Spiffe           *Spiffe
+	DstPort          uint16
 }
 
 // Equal returns true if 'a' and 'b' have the same contents.
@@ -320,6 +326,26 @@ func (l4 *L4Filter) GetIngress() bool {
 	return l4.Ingress
 }
 
+func (l4 *L4Filter) HasOriginatingTLS() bool {
+	for _, r := range l4.L7RulesPerSelector {
+		if r.OriginatingTLS != nil {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (l4 *L4Filter) HasTerminatingTLS() bool {
+	for _, r := range l4.L7RulesPerSelector {
+		if r.TerminatingTLS != nil {
+			return true
+		}
+	}
+
+	return false
+}
+
 // GetPort returns the port at which the L4Filter applies as a uint16.
 func (l4 *L4Filter) GetPort() uint16 {
 	return uint16(l4.Port)
@@ -524,6 +550,16 @@ func (l4 *L4Filter) getCerts(policyCtx PolicyContext, tls *api.TLSContext, direc
 	if tls == nil {
 		return nil, nil
 	}
+
+	if tls.Spiffe != nil {
+		return &TLSContext{
+			Spiffe: &Spiffe{
+				PeerIDs: tls.Spiffe.PeerIDs,
+			},
+			DstPort: tls.DstPort,
+		}, nil
+	}
+
 	ca, public, private, err := policyCtx.GetTLSContext(tls)
 	if err != nil {
 		log.WithError(err).Warningf("policy: Error getting %s TLS Context.", direction)
@@ -546,6 +582,7 @@ func (l4 *L4Filter) getCerts(policyCtx PolicyContext, tls *api.TLSContext, direc
 		TrustedCA:        ca,
 		CertificateChain: public,
 		PrivateKey:       private,
+		DstPort:          tls.DstPort,
 	}, nil
 }
 
@@ -687,16 +724,17 @@ func createL4IngressFilter(policyCtx PolicyContext, fromEndpoints api.EndpointSe
 	}
 	// If the filter would apply L7 rules for the Host, when we should accept everything from host,
 	// then wildcard Host at L7.
-	if !pr.Rules.IsEmpty() && len(hostWildcardL7) > 0 {
-		for cs := range filter.L7RulesPerSelector {
-			if cs.Selects(identity.ReservedIdentityHost) {
-				for _, name := range hostWildcardL7 {
-					selector := api.ReservedEndpointSelectors[name]
-					filter.cacheIdentitySelector(selector, policyCtx.GetSelectorCache(), policyCtx.IsDeny())
-				}
-			}
-		}
-	}
+	// TODO: this breaks ingress traffic from same host
+	//	if !pr.Rules.IsEmpty() && len(hostWildcardL7) > 0 {
+	//		for cs := range filter.L7RulesPerSelector {
+	//			if cs.Selects(identity.ReservedIdentityHost) {
+	//				for _, name := range hostWildcardL7 {
+	//					selector := api.ReservedEndpointSelectors[name]
+	//					filter.cacheIdentitySelector(selector, policyCtx.GetSelectorCache(), policyCtx.IsDeny())
+	//				}
+	//			}
+	//		}
+	//	}
 
 	return filter, nil
 }
@@ -1111,4 +1149,7 @@ type ProxyPolicy interface {
 	GetL7Parser() L7ParserType
 	GetIngress() bool
 	GetPort() uint16
+
+	HasOriginatingTLS() bool
+	HasTerminatingTLS() bool
 }
