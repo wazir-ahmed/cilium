@@ -73,8 +73,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:latest
-            docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}
+            docker.io/accuknox/${{ matrix.name }}-ci:latest
+            docker.io/accuknox/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}
           build-args: |
             OPERATOR_VARIANT=${{ matrix.name }}
 
@@ -88,8 +88,8 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: |
-            docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:latest-race
-            docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}-race
+            docker.io/accuknox/${{ matrix.name }}-ci:latest-race
+            docker.io/accuknox/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}-race
           build-args: |
             BASE_IMAGE=quay.io/cilium/cilium-runtime:28b5a8658b596d12d80b0e7dad3efc2e77ec2d65@sha256:fbf8eee141101fade247dbe94cf84ca3bdcd92b96108996c50859ab7edd607d0
             LOCKDEBUG=1
@@ -101,10 +101,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p image-digest/
-          echo "docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:latest@${{ steps.docker_build_ci_master.outputs.digest }}" > image-digest/${{ matrix.name }}.txt
-          echo "docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:latest-race@${{ steps.docker_build_ci_master_detect_race_condition.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
-          echo "docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}@${{ steps.docker_build_ci_master.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
-          echo "docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}-race@${{ steps.docker_build_ci_master_detect_race_condition.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
+          echo "docker.io/accuknox/${{ matrix.name }}-ci:latest@${{ steps.docker_build_ci_master.outputs.digest }}" > image-digest/${{ matrix.name }}.txt
+          echo "docker.io/accuknox/${{ matrix.name }}-ci:latest-race@${{ steps.docker_build_ci_master_detect_race_condition.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
+          echo "docker.io/accuknox/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}@${{ steps.docker_build_ci_master.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
+          echo "docker.io/accuknox/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}-race@${{ steps.docker_build_ci_master_detect_race_condition.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
 
       # PR updates
       - name: CI Build ${{ matrix.name }}
@@ -117,7 +117,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}
+            docker.io/accuknox/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}
           build-args: |
             OPERATOR_VARIANT=${{ matrix.name }}
 
@@ -126,7 +126,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p image-digest/
-          echo "docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}@${{ steps.docker_build_ci_pr.outputs.digest }}" > image-digest/${{ matrix.name }}.txt
+          echo "docker.io/accuknox/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}@${{ steps.docker_build_ci_pr.outputs.digest }}" > image-digest/${{ matrix.name }}.txt
 
       - name: CI race detection Build ${{ matrix.name }}
         if: ${{ github.event_name == 'pull_request_target' }}
@@ -138,7 +138,7 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: |
-            docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}-race
+            docker.io/accuknox/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}-race
           build-args: |
             BASE_IMAGE=quay.io/cilium/cilium-runtime:28b5a8658b596d12d80b0e7dad3efc2e77ec2d65@sha256:fbf8eee141101fade247dbe94cf84ca3bdcd92b96108996c50859ab7edd607d0
             LOCKDEBUG=1
@@ -150,8 +150,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p image-digest/
-          echo "docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}@${{ steps.docker_build_ci_pr.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
-          echo "docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}-race@${{ steps.docker_build_ci_pr_detect_race_condition.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
+          echo "docker.io/accuknox/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}@${{ steps.docker_build_ci_pr.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
+          echo "docker.io/accuknox/${{ matrix.name }}-ci:${{ steps.tag.outputs.tag }}-race@${{ steps.docker_build_ci_pr_detect_race_condition.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
 
       # Upload artifact digests
       - name: Upload artifact digests
@@ -203,15 +203,15 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:latest
-            docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ github.sha }}
+            docker.io/accuknox/${{ matrix.name }}-ci:latest
+            docker.io/accuknox/${{ matrix.name }}-ci:${{ github.sha }}
 
       - name: CI Image Releases digests
         shell: bash
         run: |
           mkdir -p image-digest/
-          echo "docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:latest@${{ steps.docker_build_ci_master.outputs.digest }}" > image-digest/${{ matrix.name }}.txt
-          echo "docker.io/${{ github.repository_owner }}/${{ matrix.name }}-ci:${{ github.sha }}@${{ steps.docker_build_ci_master.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
+          echo "docker.io/accuknox/${{ matrix.name }}-ci:latest@${{ steps.docker_build_ci_master.outputs.digest }}" > image-digest/${{ matrix.name }}.txt
+          echo "docker.io/accuknox/${{ matrix.name }}-ci:${{ github.sha }}@${{ steps.docker_build_ci_master.outputs.digest }}" >> image-digest/${{ matrix.name }}.txt
 
       # Upload artifact digests
       - name: Upload artifact digests
