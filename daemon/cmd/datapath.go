@@ -226,6 +226,7 @@ func (d *Daemon) syncEndpointsAndHostIPs() error {
 		return err
 	}
 
+	var k8sMeta *ipcache.K8sMetadata
 	for _, ipIDPair := range specialIdentities {
 		hostKey := node.GetIPsecKeyIdentity()
 		isHost := ipIDPair.ID == identity.ReservedIdentityHost
@@ -237,13 +238,17 @@ func (d *Daemon) syncEndpointsAndHostIPs() error {
 			if added {
 				log.WithField(logfields.IPAddr, ipIDPair.IP).Debugf("Added local ip to endpoint map")
 			}
+			// Host IP address might have k8s metadata associated with it.
+			// This could happen in case of External Workloads.
+			// Existing metadata should not be overwritten by the following Upsert() call.
+			k8sMeta = ipcache.IPIdentityCache.GetK8sMetadata(ipIDPair.IP.String())
 		}
 
 		delete(existingEndpoints, ipIDPair.IP.String())
 
 		// Upsert will not propagate (reserved:foo->ID) mappings across the cluster,
 		// and we specifically don't want to do so.
-		ipcache.IPIdentityCache.Upsert(ipIDPair.PrefixString(), nil, hostKey, nil, ipcache.Identity{
+		ipcache.IPIdentityCache.Upsert(ipIDPair.PrefixString(), nil, hostKey, k8sMeta, ipcache.Identity{
 			ID:     ipIDPair.ID,
 			Source: source.Local,
 		})

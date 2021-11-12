@@ -252,6 +252,13 @@ func (ipc *IPCache) Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *K8s
 	cachedIdentity, found := ipc.ipToIdentityCache[ip]
 	if found {
 		if !source.AllowOverwrite(cachedIdentity.Source, newIdentity.Source) {
+			// Host IP address might have k8s metadata associated with it.
+			// This could happen in case of External Workloads.
+			if cachedIdentity.ID == identity.ReservedIdentityHost {
+				callbackListeners = false
+				goto k8sMetadataUpdate
+			}
+
 			return false, NewErrOverwrite(cachedIdentity.Source, newIdentity.Source)
 		}
 
@@ -331,6 +338,7 @@ func (ipc *IPCache) Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *K8s
 		ipc.ipToHostIPCache[ip] = IPKeyPair{IP: hostIP, Key: hostKey}
 	}
 
+k8sMetadataUpdate:
 	if !metaEqual {
 		if k8sMeta == nil {
 			delete(ipc.ipToK8sMetadata, ip)
