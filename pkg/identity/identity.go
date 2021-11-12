@@ -236,8 +236,10 @@ func LookupReservedIdentityByLabels(lbls labels.Labels) *Identity {
 			// the new list of labels. This is to ensure the local node retains
 			// this identity regardless of label changes.
 			id := GetReservedID(lbl.Key)
-			if id == ReservedIdentityHost {
-				identity := NewIdentity(ReservedIdentityHost, lbls)
+
+			// In case of CEW, host identity could be replaced by local node identity
+			if id == ReservedIdentityHost || id == GetLocalNodeID() {
+				identity := NewIdentity(id, lbls)
 				// Pre-calculate the SHA256 hash.
 				identity.GetLabelsSHA256()
 				return identity

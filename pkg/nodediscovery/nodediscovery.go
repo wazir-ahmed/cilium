@@ -160,7 +160,12 @@ func (n *NodeDiscovery) JoinCluster(nodeName string) {
 	if resp.IPv6AllocCIDR != nil {
 		node.SetIPv6NodeRange(resp.IPv6AllocCIDR)
 	}
-	identity.SetLocalNodeID(resp.NodeIdentity)
+
+	nodeNumericIdentity := identity.NumericIdentity(resp.NodeIdentity)
+	identity.SetLocalNodeID(nodeNumericIdentity)
+	if !nodeNumericIdentity.IsReservedIdentity() {
+		identity.SetHostNumericIdentity(nodeNumericIdentity)
+	}
 }
 
 // start configures the local node and starts node discovery. This is called on

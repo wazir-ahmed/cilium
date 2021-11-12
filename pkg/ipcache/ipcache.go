@@ -8,6 +8,7 @@ import (
 
 	"github.com/cilium/cilium/pkg/controller"
 	"github.com/cilium/cilium/pkg/identity"
+	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
@@ -254,7 +255,7 @@ func (ipc *IPCache) Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *K8s
 		if !source.AllowOverwrite(cachedIdentity.Source, newIdentity.Source) {
 			// Host IP address might have k8s metadata associated with it.
 			// This could happen in case of External Workloads.
-			if cachedIdentity.ID == identity.ReservedIdentityHost {
+			if cachedIdentity.ID == identity.GetReservedID(labels.IDNameHost) {
 				callbackListeners = false
 				goto k8sMetadataUpdate
 			}

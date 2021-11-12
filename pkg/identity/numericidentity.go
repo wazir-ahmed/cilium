@@ -420,10 +420,10 @@ func GetLocalNodeID() NumericIdentity {
 
 // SetLocalNodeID sets the local node id.
 // Note that currently changes to the local node id only take effect during agent bootstrap
-func SetLocalNodeID(nodeid uint32) {
+func SetLocalNodeID(nodeid NumericIdentity) {
 	localNodeIdentity.Lock()
 	defer localNodeIdentity.Unlock()
-	localNodeIdentity.identity = NumericIdentity(nodeid)
+	localNodeIdentity.identity = nodeid
 }
 
 func GetReservedID(name string) NumericIdentity {
@@ -464,4 +464,10 @@ func IterateReservedIdentities(f func(key string, value NumericIdentity)) {
 // HasLocalScope returns true if the identity has a local scope
 func (id NumericIdentity) HasLocalScope() bool {
 	return (id & LocalIdentityFlag) != 0
+}
+
+func SetHostNumericIdentity(identity NumericIdentity) {
+	delete(reservedIdentityNames, GetReservedID(labels.IDNameHost))
+	reservedIdentities[labels.IDNameHost] = identity
+	reservedIdentityNames[identity] = labels.IDNameHost
 }
