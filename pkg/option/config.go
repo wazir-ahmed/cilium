@@ -984,6 +984,9 @@ const (
 	// within IPAM upon endpoint restore and allows the use of the restored IP
 	// regardless of whether it's available in the pool.
 	BypassIPAvailabilityUponRestore = "bypass-ip-availability-upon-restore"
+
+	// ExternalWorkload specifies whether the agent runs in a external worload.
+	ExternalWorkload = "external-workload"
 )
 
 // Default string arguments
@@ -2020,6 +2023,9 @@ type DaemonConfig struct {
 	// within IPAM upon endpoint restore and allows the use of the restored IP
 	// regardless of whether it's available in the pool.
 	BypassIPAvailabilityUponRestore bool
+
+	// ExternalWorload specifies whether the agent runs in an external workload
+	ExternalWorkload bool
 }
 
 var (
@@ -2068,6 +2074,7 @@ var (
 		APIRateLimit:                     make(map[string]string),
 
 		ExternalClusterIP: defaults.ExternalClusterIP,
+		ExternalWorkload:  defaults.ExternalWorkload,
 	}
 )
 
@@ -2831,6 +2838,7 @@ func (c *DaemonConfig) Populate() {
 	c.DisableCNPStatusUpdates = viper.GetBool(DisableCNPStatusUpdates)
 	c.EnableICMPRules = viper.GetBool(EnableICMPRules)
 	c.BypassIPAvailabilityUponRestore = viper.GetBool(BypassIPAvailabilityUponRestore)
+	c.ExternalWorkload = viper.GetBool(ExternalWorkload)
 }
 
 func (c *DaemonConfig) populateDevices() {
