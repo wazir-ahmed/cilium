@@ -441,4 +441,7 @@ const (
 	TunnelPortVXLAN = 8472
 	// TunnelPortGeneve is the default Geneve port
 	TunnelPortGeneve = 6081
+
+	// ExternalWorload specifies whether the agent runs in an external workload
+	ExternalWorkload = false
 )

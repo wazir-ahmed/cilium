@@ -1029,6 +1029,9 @@ func initializeFlags() {
 	flags.MarkHidden(option.BypassIPAvailabilityUponRestore)
 	option.BindEnv(option.BypassIPAvailabilityUponRestore)
 
+	flags.Bool(option.ExternalWorkload, defaults.ExternalWorkload, "Specifies whether the agent runs in an external workload")
+	option.BindEnv(option.ExternalWorkload)
+
 	viper.BindPFlags(flags)
 }
 
