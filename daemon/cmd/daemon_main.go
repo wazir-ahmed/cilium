@@ -986,6 +986,9 @@ func init() {
 	flags.String(option.SpirePrivilegedAPISocketPath, defaults.SpirePrivilegedAPISocketPath, "Socket path to contact the Spire agent")
 	option.BindEnv(option.Config.SpirePrivilegedAPISocketPath)
 
+	flags.Bool(option.ExternalWorkload, defaults.ExternalWorkload, "Specifies whether the agent runs in an external workload")
+	option.BindEnv(option.ExternalWorkload)
+
 	viper.BindPFlags(flags)
 }
 

@@ -443,4 +443,7 @@ const (
 
 	// SpirePrivilegedAPISocketPath is the path of the Unix domain socket used to contact the Spire agent.
 	SpirePrivilegedAPISocketPath = "/run/spire/sockets-admin/admin.sock"
+
+	// ExternalWorload specifies whether the agent runs in an external workload
+	ExternalWorkload = false
 )

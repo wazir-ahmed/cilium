@@ -957,6 +957,9 @@ const (
 	// SpirePrivilegedAPISocketPath is the name of the option that defines the
 	// path of the Unix domain socket used to contact the Spire agent.
 	SpirePrivilegedAPISocketPath = "spire-privileged-api-socket-path"
+
+	// ExternalWorkload specifies whether the agent runs in a external worload.
+	ExternalWorkload = "external-workload"
 )
 
 // Default string arguments
@@ -1963,6 +1966,9 @@ type DaemonConfig struct {
 	// SpirePrivilegedAPISocketPath is the path of the Unix domain socket used
 	// to contact the Spire agent.
 	SpirePrivilegedAPISocketPath string
+
+	// ExternalWorload specifies whether the agent runs in an external workload
+	ExternalWorkload bool
 }
 
 var (
@@ -2012,6 +2018,7 @@ var (
 		APIRateLimit:                     make(map[string]string),
 
 		ExternalClusterIP: defaults.ExternalClusterIP,
+		ExternalWorkload:  defaults.ExternalWorkload,
 	}
 )
 
@@ -2746,6 +2753,7 @@ func (c *DaemonConfig) Populate() {
 	c.EndpointGCInterval = viper.GetDuration(EndpointGCInterval)
 	c.SelectiveRegeneration = viper.GetBool(SelectiveRegeneration)
 	c.DisableCNPStatusUpdates = viper.GetBool(DisableCNPStatusUpdates)
+	c.ExternalWorkload = viper.GetBool(ExternalWorkload)
 }
 
 func (c *DaemonConfig) populateDevices() {
