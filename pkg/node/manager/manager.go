@@ -25,6 +25,7 @@ import (
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/inctimer"
 	"github.com/cilium/cilium/pkg/ipcache"
+	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/metrics"
 	"github.com/cilium/cilium/pkg/node/addressing"
@@ -341,7 +342,7 @@ func (m *Manager) NodeUpdated(n nodeTypes.Node) {
 	dpUpdate := true
 	nodeIP := n.GetNodeIP(false)
 
-	remoteHostIdentity := identity.ReservedIdentityHost
+	remoteHostIdentity := identity.GetReservedID(labels.IDNameHost)
 	if m.conf.RemoteNodeIdentitiesEnabled() {
 		nid := identity.NumericIdentity(n.NodeIdentity)
 		if nid != identity.IdentityUnknown {
