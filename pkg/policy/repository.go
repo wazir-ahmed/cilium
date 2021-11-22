@@ -434,13 +434,17 @@ func (p *Repository) Add(r api.Rule, localRuleConsumers []Endpoint) (uint64, map
 
 func (p *Repository) UpdateAuditModeL7Rules(rule *api.Rule) {
 	//MTODO: Need to update the audit mode in L7 rules
-	for _, toPorts := range rule.Ingress {
-		for _, l7Rules := range toPorts.ToPorts {
+	for _, ingressRule := range rule.Ingress {
+		for _, portRule := range ingressRule.ToPorts {
+			l7Rules := portRule.Rules
+			if l7Rules == nil {
+				continue
+			}
 			switch {
-			case len(l7Rules.Rules.HTTP) > 0:
-				for index := range l7Rules.Rules.HTTP {
-					l7Rules.Rules.HTTP[index].AuditMode = rule.AuditMode
-					l7Rules.Rules.HTTP[index].RuleID = p.GetRuleIDbyPolicyName(rule.Labels)
+			case len(l7Rules.HTTP) > 0:
+				for index := range l7Rules.HTTP {
+					l7Rules.HTTP[index].AuditMode = rule.AuditMode
+					l7Rules.HTTP[index].RuleID = p.GetRuleIDbyPolicyName(rule.Labels)
 				}
 			}
 		}
