@@ -59,35 +59,37 @@ func (r Rule) Sanitize() error {
 		}
 	}
 
-	var hostPolicy bool
+	// var hostPolicy bool
 	if r.NodeSelector.LabelSelector != nil {
 		if err := r.NodeSelector.sanitize(); err != nil {
 			return err
 		}
-		hostPolicy = true
+		// hostPolicy = true
 	}
 
-	for i := range r.Ingress {
-		if err := r.Ingress[i].sanitize(); err != nil {
-			return err
-		}
-		if hostPolicy {
-			if len(countL7Rules(r.Ingress[i].ToPorts)) > 0 {
-				return fmt.Errorf("host policies do not support L7 rules yet")
+	/*
+		for i := range r.Ingress {
+			if err := r.Ingress[i].sanitize(); err != nil {
+				return err
+			}
+			if hostPolicy {
+				if len(countL7Rules(r.Ingress[i].ToPorts)) > 0 {
+					return fmt.Errorf("host policies do not support L7 rules yet")
+				}
 			}
 		}
-	}
 
-	for i := range r.Egress {
-		if err := r.Egress[i].sanitize(); err != nil {
-			return err
-		}
-		if hostPolicy {
-			if len(countL7Rules(r.Egress[i].ToPorts)) > 0 {
-				return fmt.Errorf("host policies do not support L7 rules yet")
+		for i := range r.Egress {
+			if err := r.Egress[i].sanitize(); err != nil {
+				return err
+			}
+			if hostPolicy {
+				if len(countL7Rules(r.Egress[i].ToPorts)) > 0 {
+					return fmt.Errorf("host policies do not support L7 rules yet")
+				}
 			}
 		}
-	}
+	*/
 
 	return nil
 }
