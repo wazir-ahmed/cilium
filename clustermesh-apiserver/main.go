@@ -35,6 +35,7 @@ import (
 	"github.com/cilium/cilium/pkg/inctimer"
 	"github.com/cilium/cilium/pkg/ipcache"
 	"github.com/cilium/cilium/pkg/k8s"
+	k8sCiliumUtils "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/utils"
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	clientset "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned"
 	k8sconfig "github.com/cilium/cilium/pkg/k8s/config"
@@ -50,6 +51,7 @@ import (
 	nodeStore "github.com/cilium/cilium/pkg/node/store"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
+	policy "github.com/cilium/cilium/pkg/policy"
 
 	gops "github.com/google/gops/agent"
 	"github.com/sirupsen/logrus"
@@ -416,6 +418,63 @@ func synchronizeNodes() {
 	go ciliumNodeInformer.Run(wait.NeverStop)
 }
 
+func updateCCNP(obj interface{}) {
+	ccnp, ok := obj.(*ciliumv2.CiliumClusterwideNetworkPolicy)
+	if !ok {
+		log.Warningf("Unknown CiliumClusterwideNetworkPolicy object type %T received: %+v", obj, obj)
+		return
+	}
+
+	keyPath := path.Join(policy.CCNPPath, ccnp.Name)
+	entry := k8sCiliumUtils.ParseToCiliumRule("", ccnp.Name, ccnp.UID, ccnp.Spec)
+
+	marshaledEntry, err := json.Marshal(entry)
+	if err != nil {
+		log.WithError(err).Warningf("Unable to JSON marshal entry %#v", entry)
+	}
+
+	_, err = kvstore.Client().UpdateIfDifferent(context.Background(), keyPath, marshaledEntry, true)
+	if err != nil {
+		log.WithError(err).Warningf("Unable to update CCNP %s in etcd", keyPath)
+	} else {
+		log.Infof("Inserted CCNP into etcd: %v", entry)
+	}
+}
+
+func deleteCCNP(obj interface{}) {
+	ccnp, ok := obj.(*ciliumv2.CiliumClusterwideNetworkPolicy)
+	if !ok {
+		log.Warningf("Unknown CiliumClusterwideNetworkPolicy object type %T received: %+v", obj, obj)
+		return
+	}
+
+	keyPath := path.Join(policy.CCNPPath, ccnp.Name)
+
+	err := kvstore.Client().Delete(context.Background(), keyPath)
+	if err != nil {
+		log.WithError(err).Warningf("Unable to delete CCNP %s in etcd", keyPath)
+	}
+}
+
+func synchronizeCCNP() {
+	_, ccnpInformer := informer.NewInformer(
+		cache.NewListWatchFromClient(ciliumK8sClient.CiliumV2().RESTClient(),
+			"ciliumclusterwidenetworkpolicies", k8sv1.NamespaceAll, fields.Everything()),
+		&ciliumv2.CiliumClusterwideNetworkPolicy{},
+		0,
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: updateCCNP,
+			UpdateFunc: func(_, newObj interface{}) {
+				updateCCNP(newObj)
+			},
+			DeleteFunc: deleteCCNP,
+		},
+		nil,
+	)
+
+	go ccnpInformer.Run(wait.NeverStop)
+}
+
 func updateEndpoint(oldEp, newEp *types.CiliumEndpoint) {
 	var ipsAdded []string
 	if n := newEp.Networking; n != nil {
@@ -606,6 +665,7 @@ func runServer(cmd *cobra.Command) {
 		synchronizeIdentities()
 		synchronizeNodes()
 		synchronizeCiliumEndpoints()
+		synchronizeCCNP()
 		operatorWatchers.StartSynchronizingServices(false, cfg)
 	}
 

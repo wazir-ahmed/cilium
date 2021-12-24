@@ -39,6 +39,7 @@ rules:
   - ciliumidentities/status
   - ciliumendpoints
   - ciliumendpoints/status
+  - ciliumclusterwidenetworkpolicies
   verbs:
   - '*'
 {{- end }}
