@@ -37,7 +37,6 @@ import (
 	"github.com/cilium/cilium/pkg/k8s/synced"
 	k8sTypes "github.com/cilium/cilium/pkg/k8s/types"
 	"github.com/cilium/cilium/pkg/k8s/utils"
-	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/loadbalancer"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
@@ -46,7 +45,6 @@ import (
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
-	"github.com/cilium/cilium/pkg/policy/api"
 	"github.com/cilium/cilium/pkg/redirectpolicy"
 
 	"github.com/sirupsen/logrus"
@@ -129,12 +127,6 @@ type nodeDiscoverManager interface {
 	ClusterSizeDependantInterval(baseInterval time.Duration) time.Duration
 }
 
-type policyManager interface {
-	TriggerPolicyUpdates(force bool, reason string)
-	PolicyAdd(rules api.Rules, opts *policy.AddOptions) (newRev uint64, err error)
-	PolicyDelete(labels labels.LabelArray) (newRev uint64, err error)
-}
-
 type policyRepository interface {
 	TranslateRules(translator policy.Translator) (*policy.TranslationResult, error)
 }
@@ -187,7 +179,7 @@ type K8sWatcher struct {
 	endpointManager endpointManager
 
 	nodeDiscoverManager   nodeDiscoverManager
-	policyManager         policyManager
+	policyManager         policy.PolicyManager
 	policyRepository      policyRepository
 	svcManager            svcManager
 	redirectPolicyManager redirectPolicyManager
@@ -218,7 +210,7 @@ type K8sWatcher struct {
 func NewK8sWatcher(
 	endpointManager endpointManager,
 	nodeDiscoverManager nodeDiscoverManager,
-	policyManager policyManager,
+	policyManager policy.PolicyManager,
 	policyRepository policyRepository,
 	svcManager svcManager,
 	datapath datapath.Datapath,

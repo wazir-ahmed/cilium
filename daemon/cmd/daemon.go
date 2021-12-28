@@ -744,6 +744,9 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc, epMgr *endpointma
 
 		// Start services watcher
 		serviceStore.JoinClusterServices(&d.k8sWatcher.K8sSvcCache, option.Config)
+
+		// Start policy watcher
+		policy.InitPolicyWatcher(&d)
 	}
 
 	// Start IPAM
