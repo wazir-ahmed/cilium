@@ -123,3 +123,9 @@ func (s *SearchContext) WithLogger(log io.Writer) *SearchContext {
 type Translator interface {
 	Translate(*api.Rule, *TranslationResult) error
 }
+
+type PolicyManager interface {
+	TriggerPolicyUpdates(force bool, reason string)
+	PolicyAdd(rules api.Rules, opts *AddOptions) (newRev uint64, err error)
+	PolicyDelete(labels labels.LabelArray) (newRev uint64, err error)
+}
