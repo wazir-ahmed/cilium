@@ -25,6 +25,8 @@ import (
 
 var (
 	nodeName = "localhost"
+
+	EnvCewName = "CEW_NAME"
 )
 
 // SetName sets the name of the local node. This will overwrite the value that
@@ -57,11 +59,17 @@ func GetAbsoluteNodeName() string {
 }
 
 func init() {
-	// Give priority to the environment variable available in the Cilium agent
+	// Give priority to the environment variables available in the Cilium agent
 	if name := os.Getenv(k8sConsts.EnvNodeNameSpec); name != "" {
 		nodeName = name
 		return
 	}
+
+	if name := os.Getenv(EnvCewName); name != "" {
+		nodeName = name
+		return
+	}
+
 	if h, err := os.Hostname(); err != nil {
 		log.WithError(err).Warn("Unable to retrieve local hostname")
 	} else {
