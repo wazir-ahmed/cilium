@@ -5,6 +5,8 @@
 #define __LIB_PROXY_H_
 
 #include "conntrack.h"
+#include "l3.h"
+#include "eth.h"
 
 #if !(__ctx_is == __ctx_skb)
 #error "Proxy redirection is only supported from skb context"
@@ -157,6 +159,14 @@ CTX_REDIRECT_FN(ctx_redirect_to_proxy_ingress6, struct ipv6_ct_tuple, ipv6,
 #endif
 #undef CTX_REDIRECT_FN
 #endif /* ENABLE_TPROXY */
+
+#if defined(ENABLE_IPV4) || defined(ENABLE_IPV6)
+static __always_inline bool redirect_to_proxy(int verdict, __u8 dir)
+{
+	return is_defined(ENABLE_HOST_REDIRECT) && verdict > 0 &&
+	       (dir == CT_NEW || dir == CT_ESTABLISHED ||  dir == CT_REOPENED);
+}
+#endif
 
 /**
  * __ctx_redirect_to_proxy configures the ctx with the proxy mark and proxy
@@ -334,6 +344,41 @@ mark: __maybe_unused
 
 out: __maybe_unused
 	return ret;
+}
+
+/**
+ * ctx_redirect_to_proxy_hairpin redirects to the proxy by hairpining the
+ * packet out the incoming interface
+ */
+static __always_inline int
+ctx_redirect_to_proxy_hairpin(struct __ctx_buff *ctx, __be16 proxy_port)
+{
+	union macaddr host_mac = HOST_IFINDEX_MAC;
+	union macaddr router_mac = NODE_MAC;
+	void *data_end = (void *) (long) ctx->data_end;
+	void *data = (void *) (long) ctx->data;
+	struct iphdr *ip4;
+	int ret;
+
+	ctx_store_meta(ctx, CB_PROXY_MAGIC,
+		       MARK_MAGIC_TO_PROXY | (proxy_port << 16));
+	bpf_barrier(); /* verifier workaround */
+
+	if (!revalidate_data(ctx, &data, &data_end, &ip4))
+		return DROP_INVALID;
+
+	ret = ipv4_l3(ctx, ETH_HLEN, (__u8 *) &router_mac, (__u8 *) &host_mac, ip4);
+	if (IS_ERR(ret))
+		return ret;
+
+	cilium_dbg(ctx, DBG_CAPTURE_PROXY_PRE, proxy_port, 0);
+
+	/* Note that the actual __ctx_buff preparation for submitting the
+	 * packet to the proxy will occur in a subsequent program via
+	 * ctx_redirect_to_proxy_first().
+	 */
+
+	return redirect(HOST_IFINDEX, 0);
 }
 
 /**
