@@ -9,8 +9,17 @@
  */
 #if defined(ENABLE_HOST_FIREWALL) && defined(IS_BPF_HOST)
 
+# include "proxy.h"
 # include "policy.h"
 # include "policy_log.h"
+
+#if defined(ENABLE_IPV4) || defined(ENABLE_IPV6)
+static __always_inline bool redirect_to_proxy(int verdict, __u8 dir)
+{
+	return is_defined(ENABLE_HOST_REDIRECT) && verdict > 0 &&
+		(dir == CT_NEW || dir == CT_ESTABLISHED ||  dir == CT_REOPENED);
+}
+#endif
 
 # ifdef ENABLE_IPV6
 static __always_inline int
@@ -354,7 +363,7 @@ static __always_inline int
 ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 {
 	struct ct_state ct_state_new = {}, ct_state = {};
-	int ret, verdict, l4_off, l3_off = ETH_HLEN;
+	int ret, reason, verdict, l4_off, l3_off = ETH_HLEN;
     int proxy_port = 0;
 	__u8 policy_match_type = POLICY_MATCH_NONE;
 	__u8 audited = 0;
@@ -395,6 +404,8 @@ ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 			 &ct_state, &monitor);
 	if (ret < 0)
 		return ret;
+
+    reason = ret;
 
 	/* Retrieve source identity. */
 	info = lookup_ip4_remote_endpoint(ip4->saddr);
@@ -451,6 +462,13 @@ ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 
 	default:
 		return DROP_UNKNOWN_CT;
+	}
+
+    if (redirect_to_proxy(proxy_port, reason)) {
+		/* Trace the packet before it is forwarded to proxy */
+		send_trace_notify(ctx, TRACE_TO_PROXY, HOST_ID, 0,
+				  0, 0, reason, monitor);
+		return ctx_redirect_to_proxy4(ctx, &tuple, proxy_port, true);
 	}
 
 	/* This change is necessary for packets redirected from the lxc device to
