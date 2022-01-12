@@ -9,6 +9,7 @@
  */
 #if defined(ENABLE_HOST_FIREWALL) && defined(IS_BPF_HOST)
 
+# include "proxy.h"
 # include "policy.h"
 # include "policy_log.h"
 
@@ -16,12 +17,14 @@
 static __always_inline int
 ipv6_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id, __u32 *monitor)
 {
-	int ret, verdict, l3_off = ETH_HLEN, l4_off, hdrlen;
+	int ret, reason, verdict, l3_off = ETH_HLEN, l4_off, hdrlen;
+	int proxy_port = 0;
 	struct ct_state ct_state_new = {}, ct_state = {};
 	__u8 policy_match_type = POLICY_MATCH_NONE;
 	__u8 audited = 0;
 	struct remote_endpoint_info *info;
 	struct ipv6_ct_tuple tuple = {};
+	bool skip_egress_proxy = false;
 	__u32 dst_id = 0;
 	union v6addr orig_dip;
 	void *data, *data_end;
@@ -34,6 +37,11 @@ ipv6_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id, __u32 *monitor)
 
 	if (!revalidate_data(ctx, &data, &data_end, &ip6))
 		return DROP_INVALID;
+
+	/* If packet is coming from the egress proxy we have to skip
+	 * redirection to the egress proxy as it would loop forever.
+	 */
+	skip_egress_proxy = tc_index_skip_egress_proxy(ctx);
 
 	/* Lookup connection in conntrack map. */
 	tuple.nexthdr = ip6->nexthdr;
@@ -49,6 +57,8 @@ ipv6_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id, __u32 *monitor)
 	if (ret < 0)
 		return ret;
 
+	reason = ret;
+
 	/* Retrieve destination identity. */
 	info = lookup_ip6_remote_endpoint(&orig_dip);
 	if (info && info->sec_label)
@@ -60,12 +70,22 @@ ipv6_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id, __u32 *monitor)
 	verdict = policy_can_egress6(ctx, &tuple, src_id, dst_id,
 				     &policy_match_type, &audited, &rule_id);
 
+	if (verdict > 0) {
+        // redirection to the proxy
+        proxy_port = verdict;
+    }
+
 	/* Reply traffic and related are allowed regardless of policy verdict. */
 	if (ret != CT_REPLY && ret != CT_RELATED && verdict < 0 && !audited) {
 		send_policy_verdict_notify(ctx, dst_id, tuple.dport,
 					   tuple.nexthdr, POLICY_EGRESS, 1,
 					   verdict, policy_match_type, audited, rule_id);
 		return verdict;
+	}
+
+	if (skip_egress_proxy) {
+		verdict = 0;
+		proxy_port = 0;
 	}
 
 	switch (ret) {
@@ -97,6 +117,12 @@ ipv6_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id, __u32 *monitor)
 		return DROP_UNKNOWN_CT;
 	}
 
+	if (redirect_to_proxy(proxy_port, reason)) {
+		send_trace_notify(ctx, TRACE_TO_PROXY, HOST_ID, 0,
+				  0, 0, reason, *monitor);
+		return ctx_redirect_to_proxy_hairpin(ctx, proxy_port);
+	}
+
 	return CTX_ACT_OK;
 }
 
@@ -108,9 +134,10 @@ ipv6_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 	__u8 audited = 0;
 	__u32 monitor = 0, dst_id = WORLD_ID;
 	struct remote_endpoint_info *info;
-	int ret, verdict, l4_off, hdrlen;
+	int ret, reason, verdict, l4_off, hdrlen;
     int proxy_port = 0;
 	struct ipv6_ct_tuple tuple = {};
+	bool skip_ingress_proxy = false;
 	union v6addr orig_sip;
 	void *data, *data_end;
 	struct ipv6hdr *ip6;
@@ -131,6 +158,11 @@ ipv6_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 	if (dst_id != HOST_ID)
 		return CTX_ACT_OK;
 
+	/* If packet is coming from the ingress proxy we have to skip
+	 * redirection to the ingress proxy as we would loop forever.
+	 */
+	skip_ingress_proxy = tc_index_skip_ingress_proxy(ctx);
+
 	/* Lookup connection in conntrack map. */
 	tuple.nexthdr = ip6->nexthdr;
 	ipv6_addr_copy(&tuple.saddr, (union v6addr *)&ip6->saddr);
@@ -143,6 +175,8 @@ ipv6_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 			 &ct_state, &monitor);
 	if (ret < 0)
 		return ret;
+
+    reason = ret;
 
 	/* Retrieve source identity. */
 	info = lookup_ip6_remote_endpoint(&orig_sip);
@@ -167,6 +201,11 @@ ipv6_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 					   tuple.nexthdr, POLICY_INGRESS, 1,
 					   verdict, policy_match_type, audited, rule_id);
 		return verdict;
+	}
+
+	if (skip_ingress_proxy) {
+		verdict = 0;
+		proxy_port = 0;
 	}
 
 	switch (ret) {
@@ -198,6 +237,12 @@ ipv6_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 
 	default:
 		return DROP_UNKNOWN_CT;
+	}
+
+	if (redirect_to_proxy(proxy_port, reason)) {
+		send_trace_notify(ctx, TRACE_TO_PROXY, HOST_ID, 0,
+				  0, 0, reason, monitor);
+		return ctx_redirect_to_proxy6(ctx, &tuple, proxy_port, true);
 	}
 
 	/* This change is necessary for packets redirected from the lxc device to
@@ -260,12 +305,13 @@ ipv4_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id,
 			__u32 ipcache_srcid __maybe_unused, __u32 *monitor)
 {
 	struct ct_state ct_state_new = {}, ct_state = {};
-	int ret, verdict, l4_off, l3_off = ETH_HLEN;
+	int ret, reason, verdict, l4_off, l3_off = ETH_HLEN;
     int proxy_port = 0;
 	__u8 policy_match_type = POLICY_MATCH_NONE;
 	__u8 audited = 0;
 	struct remote_endpoint_info *info;
 	struct ipv4_ct_tuple tuple = {};
+	bool skip_egress_proxy = false;
 	__u32 dst_id = 0;
 	void *data, *data_end;
 	struct iphdr *ip4;
@@ -283,6 +329,11 @@ ipv4_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id,
 	if (!revalidate_data(ctx, &data, &data_end, &ip4))
 		return DROP_INVALID;
 
+	/* If packet is coming from the egress proxy we have to skip
+	 * redirection to the egress proxy as it would loop forever.
+	 */
+	skip_egress_proxy = tc_index_skip_egress_proxy(ctx);
+
 	/* Lookup connection in conntrack map. */
 	tuple.nexthdr = ip4->protocol;
 	tuple.daddr = ip4->daddr;
@@ -292,6 +343,8 @@ ipv4_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id,
 			 &ct_state, monitor);
 	if (ret < 0)
 		return ret;
+
+	reason = ret;
 
 	/* Retrieve destination identity. */
 	info = lookup_ip4_remote_endpoint(ip4->daddr);
@@ -315,6 +368,11 @@ ipv4_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id,
 					   tuple.nexthdr, POLICY_EGRESS, 0,
 					   verdict, policy_match_type, audited, rule_id);
 		return verdict;
+	}
+
+	if (skip_egress_proxy) {
+		verdict = 0;
+		proxy_port = 0;
 	}
 
 	switch (ret) {
@@ -347,6 +405,12 @@ ipv4_host_policy_egress(struct __ctx_buff *ctx, __u32 src_id,
 		return DROP_UNKNOWN_CT;
 	}
 
+	if (redirect_to_proxy(proxy_port, reason)) {
+		send_trace_notify(ctx, TRACE_TO_PROXY, HOST_ID, 0,
+				  0, 0, reason, *monitor);
+		return ctx_redirect_to_proxy_hairpin(ctx, proxy_port);
+	}
+
 	return CTX_ACT_OK;
 }
 
@@ -354,13 +418,14 @@ static __always_inline int
 ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 {
 	struct ct_state ct_state_new = {}, ct_state = {};
-	int ret, verdict, l4_off, l3_off = ETH_HLEN;
+	int ret, reason, verdict, l4_off, l3_off = ETH_HLEN;
     int proxy_port = 0;
 	__u8 policy_match_type = POLICY_MATCH_NONE;
 	__u8 audited = 0;
 	__u32 monitor = 0, dst_id = WORLD_ID;
 	struct remote_endpoint_info *info;
 	struct ipv4_ct_tuple tuple = {};
+	bool skip_ingress_proxy = false;
 	bool is_untracked_fragment = false;
 	void *data, *data_end;
 	struct iphdr *ip4;
@@ -380,6 +445,11 @@ ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 	if (dst_id != HOST_ID)
 		return CTX_ACT_OK;
 
+	/* If packet is coming from the ingress proxy we have to skip
+	 * redirection to the ingress proxy as we would loop forever.
+	 */
+	skip_ingress_proxy = tc_index_skip_ingress_proxy(ctx);
+
 	/* Lookup connection in conntrack map. */
 	tuple.nexthdr = ip4->protocol;
 	tuple.daddr = ip4->daddr;
@@ -395,6 +465,8 @@ ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 			 &ct_state, &monitor);
 	if (ret < 0)
 		return ret;
+
+    reason = ret;
 
 	/* Retrieve source identity. */
 	info = lookup_ip4_remote_endpoint(ip4->saddr);
@@ -420,6 +492,11 @@ ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 					   tuple.nexthdr, POLICY_INGRESS, 0,
 					   verdict, policy_match_type, audited, rule_id);
 		return verdict;
+	}
+
+	if (skip_ingress_proxy) {
+		verdict = 0;
+		proxy_port = 0;
 	}
 
 	switch (ret) {
@@ -451,6 +528,12 @@ ipv4_host_policy_ingress(struct __ctx_buff *ctx, __u32 *src_id)
 
 	default:
 		return DROP_UNKNOWN_CT;
+	}
+
+	if (redirect_to_proxy(proxy_port, reason)) {
+		send_trace_notify(ctx, TRACE_TO_PROXY, HOST_ID, 0,
+				  0, 0, reason, monitor);
+		return ctx_redirect_to_proxy4(ctx, &tuple, proxy_port, true);
 	}
 
 	/* This change is necessary for packets redirected from the lxc device to

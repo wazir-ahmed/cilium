@@ -258,8 +258,15 @@ skip_host_firewall:
 		/* Let through packets to the node-ip so they are
 		 * processed by the local ip stack.
 		 */
-		if (ep->flags & ENDPOINT_F_HOST)
+		if (ep->flags & ENDPOINT_F_HOST) {
+			/* This packet originates from ingress proxy, egresses out of cilium_host
+			 * and destined to the local stack. This packet needs to skip policy
+			 * enforcement when it is received by cilium_net */
+			if(from_host && tc_index_skip_ingress_proxy(ctx)) {
+				ctx_store_meta(ctx, CB_PROXY_MAGIC, MARK_MAGIC_PROXY_INGRESS);
+			}
 			return CTX_ACT_OK;
+        }
 
 		return ipv6_local_delivery(ctx, l3_off, secctx, ep,
 					   METRIC_INGRESS, from_host);
@@ -538,8 +545,15 @@ handle_ipv4(struct __ctx_buff *ctx, __u32 secctx,
 		/* Let through packets to the node-ip so they are processed by
 		 * the local ip stack.
 		 */
-		if (ep->flags & ENDPOINT_F_HOST)
+		if (ep->flags & ENDPOINT_F_HOST) {
+			/* This packet originates from ingress proxy, egresses out of cilium_host
+			 * and destined to the local stack. This packet needs to skip policy
+			 * enforcement when it is received by cilium_net */
+			if(from_host && tc_index_skip_ingress_proxy(ctx)) {
+				ctx_store_meta(ctx, CB_PROXY_MAGIC, MARK_MAGIC_PROXY_INGRESS);
+			}
 			return CTX_ACT_OK;
+		}
 
 		return ipv4_local_delivery(ctx, ETH_HLEN, secctx, ip4, ep,
 					   METRIC_INGRESS, from_host);
@@ -1005,6 +1019,10 @@ int to_netdev(struct __ctx_buff *ctx __maybe_unused)
 		goto out;
 	}
 
+	if ((ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_PROXY_EGRESS) {
+		ctx->tc_index |= TC_INDEX_F_SKIP_EGRESS_PROXY;
+	}
+
 	policy_clear_mark(ctx);
 
 	switch (proto) {
@@ -1090,6 +1108,8 @@ int to_host(struct __ctx_buff *ctx)
 		ctx->mark = magic; /* CB_ENCRYPT_MAGIC */
 		srcID = ctx_load_meta(ctx, CB_ENCRYPT_IDENTITY);
 		set_identity_mark(ctx, srcID);
+	} else if ((magic & 0xFFFF) == MARK_MAGIC_PROXY_INGRESS) {
+		ctx->tc_index |= TC_INDEX_F_SKIP_INGRESS_PROXY;
 	} else if ((magic & 0xFFFF) == MARK_MAGIC_TO_PROXY) {
 		/* Upper 16 bits may carry proxy port number */
 		__be16 port = magic >> 16;
