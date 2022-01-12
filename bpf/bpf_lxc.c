@@ -45,14 +45,6 @@
 #error "Either ENABLE_ARP_PASSTHROUGH or ENABLE_ARP_RESPONDER can be defined"
 #endif
 
-#if defined(ENABLE_IPV4) || defined(ENABLE_IPV6)
-static __always_inline bool redirect_to_proxy(int verdict, __u8 dir)
-{
-	return is_defined(ENABLE_HOST_REDIRECT) && verdict > 0 &&
-	       (dir == CT_NEW || dir == CT_ESTABLISHED ||  dir == CT_REOPENED);
-}
-#endif
-
 #ifdef ENABLE_CUSTOM_CALLS
 /* Encode return value and identity into cb buffer. This is used before
  * executing tail calls to custom programs. "ret" is the return value supposed
