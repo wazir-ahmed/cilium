@@ -11,7 +11,6 @@ import (
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/metrics"
-	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy/api"
 	"github.com/sirupsen/logrus"
 )
@@ -58,10 +57,8 @@ restart:
 				goto restart
 			}
 
-			if option.Config.Debug {
-				scopedLog = log.WithFields(logrus.Fields{"kvstore-event": event.Typ.String(), "key": event.Key})
-				scopedLog.Debug("Received event")
-			}
+			scopedLog = log.WithFields(logrus.Fields{"kvstore-event": event.Typ.String(), "key": event.Key})
+			scopedLog.Debug("Received event")
 
 			if event.Typ != kvstore.EventTypeListDone {
 				policyName = strings.TrimPrefix(event.Key, (CCNPPath + "/"))
