@@ -71,7 +71,15 @@ func (l *LogRecordNotify) l7Proto() string {
 
 // DumpInfo dumps an access log notification
 func (l *LogRecordNotify) DumpInfo() {
-	policyName, _ := GetPolicyName(l.HTTP.RuleID)
+	policyName := ""
+	auditMode := ""
+	if l.HTTP != nil {
+		policyName, _ = GetPolicyName(l.HTTP.RuleID)
+		auditMode = l.GetAuditVerdict(l.HTTP.AuditMode)
+	} else {
+		policyName, _ = GetPolicyName(0)
+		auditMode = l.GetAuditVerdict(false)
+	}
 
 	switch l.Type {
 	case accesslog.TypeRequest:
@@ -79,14 +87,14 @@ func (l *LogRecordNotify) DumpInfo() {
 			l.direction(), l.Type, l.l7Proto(), l.SourceEndpoint.ID, l.SourceEndpoint.Labels,
 			l.DestinationEndpoint.ID, l.DestinationEndpoint.Labels,
 			l.SourceEndpoint.Identity, l.DestinationEndpoint.Identity,
-			l.Verdict, l.GetAuditVerdict(l.HTTP.AuditMode), policyName)
+			l.Verdict, auditMode, policyName)
 
 	case accesslog.TypeResponse:
 		fmt.Printf("%s %s %s to %d (%s) from %d (%s), identity %d->%d, verdict %s %s PolicyName %s",
 			l.direction(), l.Type, l.l7Proto(), l.SourceEndpoint.ID, l.SourceEndpoint.Labels,
 			l.DestinationEndpoint.ID, l.DestinationEndpoint.Labels,
 			l.SourceEndpoint.Identity, l.DestinationEndpoint.Identity,
-			l.Verdict, l.GetAuditVerdict(l.HTTP.AuditMode), policyName)
+			l.Verdict, auditMode, policyName)
 	}
 
 	if http := l.HTTP; http != nil {
