@@ -17,6 +17,7 @@ package monitor
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/cilium/cilium/pkg/proxy/accesslog"
@@ -37,17 +38,6 @@ func (l *LogRecordNotify) direction() string {
 	default:
 		return "??"
 	}
-}
-
-var audit string
-
-func (l *LogRecordNotify) GetAuditVerdict(isAudited bool) string {
-	if l.HTTP != nil {
-		if isAudited {
-			return "auditMode:true"
-		}
-	}
-	return "auditMode:false"
 }
 
 func (l *LogRecordNotify) l7Proto() string {
@@ -71,22 +61,29 @@ func (l *LogRecordNotify) l7Proto() string {
 
 // DumpInfo dumps an access log notification
 func (l *LogRecordNotify) DumpInfo() {
-	policyName, _ := GetPolicyName(l.HTTP.RuleID)
+	var policyName, auditMode string
+	if l.HTTP != nil {
+		policyName, _ = GetPolicyName(l.HTTP.RuleID)
+		auditMode = strconv.FormatBool(l.HTTP.AuditMode)
+	} else {
+		policyName = "unknown"
+		auditMode = "false"
+	}
 
 	switch l.Type {
 	case accesslog.TypeRequest:
-		fmt.Printf("%s %s %s from %d (%s) to %d (%s), identity %d->%d, verdict %s %s PolicyName %s",
+		fmt.Printf("%s %s %s from %d (%s) to %d (%s), identity %d->%d, verdict %s, auditMode %s, policyName %s",
 			l.direction(), l.Type, l.l7Proto(), l.SourceEndpoint.ID, l.SourceEndpoint.Labels,
 			l.DestinationEndpoint.ID, l.DestinationEndpoint.Labels,
 			l.SourceEndpoint.Identity, l.DestinationEndpoint.Identity,
-			l.Verdict, l.GetAuditVerdict(l.HTTP.AuditMode), policyName)
+			l.Verdict, auditMode, policyName)
 
 	case accesslog.TypeResponse:
-		fmt.Printf("%s %s %s to %d (%s) from %d (%s), identity %d->%d, verdict %s %s PolicyName %s",
+		fmt.Printf("%s %s %s to %d (%s) from %d (%s), identity %d->%d, verdict %s, auditMode %s, policyName %s",
 			l.direction(), l.Type, l.l7Proto(), l.SourceEndpoint.ID, l.SourceEndpoint.Labels,
 			l.DestinationEndpoint.ID, l.DestinationEndpoint.Labels,
 			l.SourceEndpoint.Identity, l.DestinationEndpoint.Identity,
-			l.Verdict, l.GetAuditVerdict(l.HTTP.AuditMode), policyName)
+			l.Verdict, auditMode, policyName)
 	}
 
 	if http := l.HTTP; http != nil {
