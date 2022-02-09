@@ -547,7 +547,6 @@ handle_ipv4(struct __ctx_buff *ctx, __u32 secctx,
 			{
 				ctx_store_meta(ctx, CB_PROXY_MAGIC, MARK_MAGIC_PROXY_INGRESS);
 			}
-			cilium_dbg(ctx, DBG_GENERIC, 101, 0);
 			return CTX_ACT_OK;
 		}
 
@@ -1013,6 +1012,10 @@ int to_netdev(struct __ctx_buff *ctx __maybe_unused)
 	if (!proto && !validate_ethertype(ctx, &proto)) {
 		ret = DROP_UNSUPPORTED_L2;
 		goto out;
+	}
+
+	if ((ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_PROXY_EGRESS) {
+		ctx->tc_index |= TC_INDEX_F_SKIP_EGRESS_PROXY;
 	}
 
 	policy_clear_mark(ctx);
