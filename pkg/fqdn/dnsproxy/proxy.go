@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
@@ -38,6 +39,7 @@ import (
 	"github.com/cilium/cilium/pkg/policy"
 	"github.com/cilium/cilium/pkg/policy/api"
 	"github.com/cilium/cilium/pkg/spanstat"
+	"golang.org/x/sys/unix"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
@@ -441,8 +443,8 @@ func StartDNSProxy(address string, port uint16, enableDNSCompression bool, maxRe
 	// Bind the DNS forwarding clients on UDP and TCP
 	// Note: SingleInFlight should remain disabled. When enabled it folds DNS
 	// retries into the previous lookup, suppressing them.
-	p.UDPClient = &dns.Client{Net: "udp", Timeout: ProxyForwardTimeout, SingleInflight: false}
-	p.TCPClient = &dns.Client{Net: "tcp", Timeout: ProxyForwardTimeout, SingleInflight: false}
+	p.UDPClient = &dns.Client{Net: "udp", Dialer: newDialer(linux_defaults.MagicMarkEgress), Timeout: ProxyForwardTimeout, SingleInflight: false}
+	p.TCPClient = &dns.Client{Net: "tcp", Dialer: newDialer(linux_defaults.MagicMarkEgress), Timeout: ProxyForwardTimeout, SingleInflight: false}
 
 	return p, nil
 }
@@ -783,4 +785,20 @@ func shouldCompressResponse(request, response *dns.Msg) bool {
 	}
 
 	return false
+}
+
+func newDialer(mark int) *net.Dialer {
+	return &net.Dialer{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var opErr error
+			err := c.Control(func(fd uintptr) {
+				if mark != 0 {
+					opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, mark)
+				}
+			})
+			if err != nil {
+				return err
+			}
+			return opErr
+		}}
 }

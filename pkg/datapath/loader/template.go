@@ -220,15 +220,18 @@ func sliceToBe32(input []byte) uint32 {
 func elfVariableSubstitutions(ep datapath.Endpoint) map[string]uint32 {
 	result := make(map[string]uint32)
 
-	if ipv6 := ep.IPv6Address(); ipv6 != nil {
-		// Corresponds to DEFINE_IPV6() in bpf/lib/utils.h
-		result["LXC_IP_1"] = sliceToBe32(ipv6[0:4])
-		result["LXC_IP_2"] = sliceToBe32(ipv6[4:8])
-		result["LXC_IP_3"] = sliceToBe32(ipv6[8:12])
-		result["LXC_IP_4"] = sliceToBe32(ipv6[12:16])
-	}
-	if ipv4 := ep.IPv4Address(); ipv4 != nil {
-		result["LXC_IPV4"] = byteorder.NetIPv4ToHost32(net.IP(ipv4))
+	// The following variables are not defined/used for host endpoint
+	if !ep.IsHost() {
+		if ipv6 := ep.IPv6Address(); ipv6 != nil {
+			// Corresponds to DEFINE_IPV6() in bpf/lib/utils.h
+			result["LXC_IP_1"] = sliceToBe32(ipv6[0:4])
+			result["LXC_IP_2"] = sliceToBe32(ipv6[4:8])
+			result["LXC_IP_3"] = sliceToBe32(ipv6[8:12])
+			result["LXC_IP_4"] = sliceToBe32(ipv6[12:16])
+		}
+		if ipv4 := ep.IPv4Address(); ipv4 != nil {
+			result["LXC_IPV4"] = byteorder.NetIPv4ToHost32(net.IP(ipv4))
+		}
 	}
 
 	mac := ep.GetNodeMAC()
