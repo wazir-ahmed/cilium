@@ -520,6 +520,11 @@ func CreateHostEndpoint(owner regeneration.Owner, proxy EndpointProxy, allocator
 	ep.nodeMAC = mac
 	ep.DatapathConfiguration = NewDatapathConfiguration()
 
+	if option.Config.EnableHostFirewall {
+		ep.IPv4 = addressing.CiliumIPv4(node.GetIPv4())
+		ep.IPv6 = addressing.CiliumIPv6(node.GetIPv6())
+	}
+
 	ep.setState(StateWaitingForIdentity, "Endpoint creation")
 
 	return ep, nil
