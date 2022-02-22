@@ -116,7 +116,7 @@ func TestFlowTCPFilter(t *testing.T) {
 	for _, tt := range testflags {
 		argsfilter = []*flowpb.FlowFilter{{TcpFlags: tt.argsf}}
 		argsevent = &v1.Event{Event: &flowpb.Flow{
-			L4: &flowpb.Layer4{Protocol: &flowpb.Layer4_TCP{TCP: &flowpb.TCP{Flags: tt.argsev}}}}}
+			Type: flowpb.FlowType_L3_L4, L4: &flowpb.Layer4{Protocol: &flowpb.Layer4_TCP{TCP: &flowpb.TCP{Flags: tt.argsev}}}}}
 		t.Run(tt.name, func(t *testing.T) {
 			fl, err := BuildFilterList(context.Background(), argsfilter, []OnBuildFilter{&TCPFilter{}})
 			if err != nil {

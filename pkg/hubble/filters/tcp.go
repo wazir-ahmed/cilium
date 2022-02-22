@@ -24,7 +24,11 @@ import (
 
 func filterByTCPFlags(flags []*flowpb.TCPFlags) (FilterFunc, error) {
 	return func(ev *v1.Event) bool {
-		l4tcp := ev.GetFlow().GetL4().GetTCP()
+		flow := ev.GetFlow()
+		if flow == nil || flow.Type != flowpb.FlowType_L3_L4 {
+			return false
+		}
+		l4tcp := flow.GetL4().GetTCP()
 		if l4tcp == nil {
 			return false
 		}
