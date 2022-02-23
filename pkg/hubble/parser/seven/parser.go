@@ -150,10 +150,15 @@ func (p *Parser) Decode(r *accesslog.LogRecord, decoded *pb.Flow) error {
 	decoded.DestinationService = destinationService
 	decoded.TrafficDirection = decodeTrafficDirection(r.ObservationPoint)
 	decoded.PolicyMatchType = 0
-	policyName, _ := monitor.GetPolicyName(r.HTTP.RuleID)
-	decoded.AuditMode = r.HTTP.AuditMode
+	var policyName string
+	if r.HTTP != nil {
+		decoded.AuditMode = r.HTTP.AuditMode
+		policyName, _ = monitor.GetPolicyName(r.HTTP.RuleID)
+	}
 	if len(policyName) > 0 {
 		decoded.PolicyName = policyName
+	} else {
+		decoded.PolicyName = "unknown"
 	}
 	decoded.Summary = p.getSummary(r, decoded)
 
